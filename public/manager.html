@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fire Kirin — Manager</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="panel-body">
+<header class="panel-head">
+  <div class="logo">FIRE<span>KIRIN</span> <small>MANAGER</small></div>
+  <div class="head-right">
+    <span class="stat-pill">Float <b id="me-balance" class="mono">0</b></span>
+    <span id="me-name" class="muted"></span>
+    <button id="btn-logout" class="btn ghost">LOG OUT</button>
+  </div>
+</header>
+<main class="panel-main mgr-main">
+  <section class="mgr-left">
+    <section class="requests-box">
+      <h3>Redeem requests <span id="req-count" class="badge">0</span></h3>
+      <div id="requests"></div>
+    </section>
+    <section class="grant-box">
+      <h3>Grant points to a player</h3>
+      <div class="row">
+        <input id="g-username" type="text" placeholder="player username">
+        <input id="g-amount" type="number" placeholder="amount">
+      </div>
+      <input id="g-note" type="text" placeholder="note (optional)" style="width:100%;margin-top:6px">
+      <button id="btn-grant" class="btn primary" style="margin-top:8px">GRANT</button>
+    </section>
+    <section class="history-box">
+      <h3>My history</h3>
+      <table id="hist-tbl"><thead><tr><th>Type</th><th>Amount</th><th>Time</th></tr></thead><tbody></tbody></table>
+    </section>
+  </section>
+  <section class="mgr-right">
+    <h3>My claimed players</h3>
+    <table id="players-tbl">
+      <thead><tr><th>Username</th><th>Points</th><th>Wagered</th><th>Won</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+<div id="toast" class="toast"></div>
+<script src="/auth.js"></script>
+<script src="/manager.js"></script>
+</body>
+</html>

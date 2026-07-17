@@ -1,0 +1,22 @@
+{
+  "name": "fire-kirin-dev",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Server-authoritative arcade fish shooter (Fire Kirin style) with owner/manager/player hierarchy, betting, RTP control, bonus modes, and admin/manager panels.",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "simulate": "node scripts/simulate.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.5",
+    "socket.io": "^4.7.5"
+  }
+}

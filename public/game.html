@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Fire Kirin — Arcade Fish Shooter</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+  <div id="hud">
+    <div id="topbar">
+      <div class="logo">FIRE<span>KIRIN</span></div>
+      <div class="top-right">
+        <span id="auth-bar" class="stat-pill hidden">👤 <span id="auth-user"></span></span>
+        <button id="btn-logout" class="mode-btn hidden">LOG OUT</button>
+        <button id="btn-redeem" class="redeem-pill">💎 Redeem</button>
+        <button id="btn-sound" class="icon-btn" title="Sound on/off">🔊</button>
+        <button id="btn-full" class="icon-btn" title="Fullscreen">⛶</button>
+      </div>
+    </div>
+    <div id="bottombar">
+      <div class="panel balance-panel"><div class="label">BALANCE</div><div class="value" id="balance">0</div></div>
+      <div class="panel win-panel"><div class="label">WIN</div><div class="value" id="win">0</div></div>
+      <div class="bet-controls">
+        <button id="bet-down" class="round-btn">−</button>
+        <div class="panel bet-panel"><div class="label">BET</div><div class="value" id="bet">10</div></div>
+        <button id="bet-up" class="round-btn">+</button>
+      </div>
+      <div class="weapon-row" id="weapon-row"></div>
+      <button id="btn-auto" class="mode-btn">AUTO</button>
+    </div>
+  </div>
+  <div id="msg-layer"></div>
+  <div id="mega-layer" class="mega-banner" style="display:none"></div>
+  <div id="mini-layer"></div>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/auth.js"></script>
+<script src="/sfx.js"></script>
+<script src="/game.js"></script>
+</body>
+</html>

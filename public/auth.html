@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fire Kirin — Sign in</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="auth-body">
+  <div class="auth-card">
+    <div class="logo">FIRE<span>KIRIN</span></div>
+    <div class="auth-tabs">
+      <button id="tab-login" class="auth-tab on">LOG IN</button>
+      <button id="tab-signup" class="auth-tab">CREATE ACCOUNT</button>
+    </div>
+    <p class="auth-sub" id="auth-sub">Welcome back — sign in to keep your points balance.</p>
+    <input id="f-username" type="text" placeholder="username" autocomplete="username">
+    <input id="f-password" type="password" placeholder="password" autocomplete="current-password">
+    <div id="auth-msg" class="auth-msg"></div>
+    <button id="btn-submit" class="btn primary">LOG IN</button>
+    <p class="auth-fine">Free-play. Virtual points only. No real money.</p>
+  </div>
+<script src="/auth.js"></script>
+<script>
+(function(){
+  let mode = 'login';
+  const elU = document.getElementById('f-username');
+  const elP = document.getElementById('f-password');
+  const elMsg = document.getElementById('auth-msg');
+  const btn = document.getElementById('btn-submit');
+  const tabL = document.getElementById('tab-login');
+  const tabS = document.getElementById('tab-signup');
+  const sub = document.getElementById('auth-sub');
+  function setMode(m){ mode=m; tabL.classList.toggle('on', m==='login'); tabS.classList.toggle('on', m==='signup'); btn.textContent = m==='login'?'LOG IN':'CREATE ACCOUNT'; sub.textContent = m==='login' ? 'Welcome back — sign in to keep your points balance.' : 'New players get 2,000 bonus points on signup.'; elMsg.textContent=''; }
+  tabL.onclick = () => setMode('login');
+  tabS.onclick = () => setMode('signup');
+  async function submit(){
+    const u = elU.value.trim(); const p = elP.value;
+    elMsg.textContent = ''; elMsg.classList.remove('error');
+    if (!u || !p){ elMsg.textContent='username and password required'; elMsg.classList.add('error'); return; }
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      const r = mode==='login' ? await Auth.login(u,p) : await Auth.register(u,p);
+      if (r.ok){ Auth.redirectByRole(r.data.role); }
+      else { elMsg.textContent = (r.data && r.data.error) || ('error ' + r.status); elMsg.classList.add('error'); }
+    } catch(e){ elMsg.textContent='network error'; elMsg.classList.add('error'); }
+    btn.disabled = false; setMode(mode);
+  }
+  btn.onclick = submit;
+  elP.addEventListener('keydown', e => { if (e.key==='Enter') submit(); });
+  elU.addEventListener('keydown', e => { if (e.key==='Enter') elP.focus(); });
+  // If already logged in, redirect to the right home.
+  Auth.me().then(m => { if (m) Auth.redirectByRole(m.role); });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: fire-kirin-dev
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.22.2
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        value: changeme123
+      - key: SIGNUP_BONUS
+        value: "2000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: firekirin-db
+          property: connectionString
+databases:
+  - name: firekirin-db
+    databaseName: firekirin
+    plan: free

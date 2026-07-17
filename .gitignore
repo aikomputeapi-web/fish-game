@@ -6,3 +6,5 @@ node_modules/
 dist/
 .DS_Store
 Thumbs.db
+# gstack (global install)
+.amazonq/rules/gstack.md
