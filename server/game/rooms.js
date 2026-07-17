@@ -1,20 +1,26 @@
 /* rooms.js — server-authoritative game room engine.
    Spawns fish on parametric paths, validates hits/score on demand, runs the
    death-check + RTP allowance controller, triggers bonus rounds + AoE chains,
-   and pushes balance/kill/spawn events to clients. Solo room now; the same path
-   broadcast would support shared tables later. */
+   and pushes balance/kill/spawn events to clients.
+
+   Features: armor damage reduction, 5 unique weapon types (single/spread/
+   pierce/freeze/heavy), shared boss HP pools, freeze status effects. */
 'use strict';
 
+const db = require('../db');
 const { W, H, WEAPON_LEVELS, BETS, FIRE_INTERVAL } = require('./constants');
 const { FISH, BOSS, VARIABLE_BOSSES } = require('./fishTypes');
-const { makePath, makeBossPath, bezier, pathLength } = require('./paths');
+const { makePath, makeBossPath, bezier, bezierTangent, pathLength } = require('./paths');
 const rng = require('./rng');
-const paths = require('./paths');
+
+const TICK_MS = 500;
 
 const TOTAL_WEIGHT = FISH.reduce((s, x) => s + x.weight, 0);
 
 const rooms = new Map();   // roomKey -> Room
 const sockets = new Map(); // userId -> Set<socket>
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
 function getRoom(key = 'default') {
   let r = rooms.get(key);
@@ -23,19 +29,16 @@ function getRoom(key = 'default') {
 }
 
 function createRoom(key) {
-  const r = {
+  return {
     key,
-    fish: new Map(),     // fishId -> { def, path, tStart, dur, x, y, alive }
+    fish: new Map(),
     nextId: 1,
     spawnTimer: 0,
     bossTimer: 45,
-    spawnAccs: {},
-    bonusTimer: 0,       // >0 = bonus active
-    allowance: 1.0,      // RTP allowance (controller)
+    bonusTimer: 0,
+    allowance: 1.0,
     stateTimer: 0,
-    spawnBossPending: false,
   };
-  return r;
 }
 
 function pickSpecies() {
@@ -45,17 +48,19 @@ function pickSpecies() {
 }
 
 function spawnFish(room, def, opts = {}) {
-  const path = opts.path || paths.makePath(def.r || 20);
+  const path = opts.path || makePath(def.r || 20);
   const speed = (def.speed || 100) * (0.85 + Math.random() * 0.3);
   const dur = pathLength(path) / speed;
   const id = room.nextId++;
   const f = {
     id, def, path,
     tStart: Date.now(),
-    dur: dur * 1000,        // ms
-    x: path[0].x, y: path[0].y,
+    dur: dur * 1000,
     alive: true,
-    hp: 0,                  // cosmetic HP accumulator
+    hp: 0,
+    currentHp: def.sharedHp || 0,
+    frozen: 0,
+    frozenAt: 0,
   };
   room.fish.set(id, f);
   return f;
@@ -74,19 +79,131 @@ function spawnBoss(room) {
   return f;
 }
 
-// compute current position of a fish by time (parametric)
-function fishPosition(f, now = Date.now()) {
-  const elapsed = (now - f.tStart) / f.dur;
-  if (elapsed >= 1) return null;       // off-screen
-  const p = bezier(f.path, rng.clamp(elapsed, 0, 1));
-  return p;
+function effectiveDamage(bet, armor, armorPierce) {
+  const reducedArmor = Math.max(0, armor * (1 - (armorPierce || 0)));
+  return Math.max(1, Math.floor(bet - reducedArmor));
 }
 
-// ============================================================ socket handlers
+function fishPosition(f, now = Date.now()) {
+  let t;
+  if (f.frozen > 0) {
+    t = (f.frozenAt - f.tStart) / f.dur;
+  } else {
+    t = (now - f.tStart) / f.dur;
+  }
+  if (t >= 1) return null;
+  return bezier(f.path, clamp(t, 0, 1));
+}
+
+function serializeFish(f) {
+  return {
+    fishId: f.id, typeId: f.def.id, def: { ...f.def },
+    path: f.path, age: Date.now() - f.tStart, dur: f.dur, boss: !!f.boss,
+    currentHp: f.currentHp || 0, maxHp: f.def.sharedHp || 0,
+  };
+}
+
+// ---- bonus round ----
+function startBonus(room, io) {
+  room.bonusTimer = 30;
+  io.to(room.key).emit('bonusStart', { duration: 30 });
+  io.to(room.key).emit('miniGame', { choices: [0, 1, 2], prompt: 'Pick a chest!' });
+  setTimeout(() => {
+    room.bonusTimer = 0;
+    io.to(room.key).emit('bonusEnd');
+  }, 30000);
+}
+
+async function resolveMiniGame(userId, choiceIndex, io) {
+  const r = Math.random();
+  let prize;
+  if (r < 0.70) prize = 50 + Math.floor(Math.random() * 151);
+  else if (r < 0.95) prize = 300 + Math.floor(Math.random() * 401);
+  else prize = 1000 + Math.floor(Math.random() * 2001);
+  await win(userId, prize);
+  const set = sockets.get(userId);
+  if (set) for (const s of set) s.emit('miniGameResult', { choice: choiceIndex, prize, win: prize });
+}
+
+// ---- economy helpers ----
+async function bet(userId, amount) {
+  const r = await db.adjustPoints(userId, -amount, { type: 'bet', note: 'wager' });
+  if (!r.ok) return { ok: false };
+  await db.roomStatsAdd('default', amount, 0);
+  broadcastBalance(userId, r.balance);
+  return { ok: true, balance: r.balance };
+}
+
+async function win(userId, amount) {
+  const r = await db.adjustPoints(userId, amount, { type: 'win', note: 'payout' });
+  if (r.ok) {
+    await db.roomStatsAdd('default', 0, amount);
+    broadcastBalance(userId, r.balance);
+  }
+  return r;
+}
+
+function broadcastBalance(userId, balance) {
+  const set = sockets.get(userId);
+  if (set) for (const s of set) s.emit('balance', { points: balance });
+}
+
+function kickUser(userId, reason) {
+  const set = sockets.get(userId);
+  if (set) { for (const s of set) s.emit('banned', { reason }); set.forEach(s => s.disconnect()); sockets.delete(userId); }
+}
+
+// ---- shared boss HP kill logic ----
+async function handleBossKill(fish, userId, betValue, pos, room, io, weapon) {
+  fish.alive = false;
+  let mult = fish.def.mult;
+  if (fish.def.variable) mult = rng.rollVariableMult(fish.def);
+  const payout = mult * betValue;
+  await win(userId, payout);
+  io.to(room.key).emit('kill', {
+    fishId: fish.id, winnerId: userId, mult, payout, bet: betValue,
+    x: pos.x, y: pos.y, isAoE: false, chain: null,
+    variable: !!fish.def.variable, kind: fish.def.kind, name: fish.def.name,
+  });
+  room.fish.delete(fish.id);
+  return { killed: true, mult, payout };
+}
+
+// ---- normal fish kill logic (with AoE chain) ----
+async function handleNormalKill(fish, userId, betValue, pos, room, io) {
+  fish.alive = false;
+  let mult = fish.def.mult;
+  if (fish.def.variable) mult = rng.rollVariableMult(fish.def);
+  const payout = mult * betValue;
+  let chain = null;
+  if (fish.def.special === 'aoe') {
+    chain = [];
+    for (const other of room.fish.values()) {
+      if (other === fish || !other.alive || other.boss) continue;
+      const op = fishPosition(other);
+      if (!op) continue;
+      if (Math.hypot(op.x - pos.x, op.y - pos.y) < 260) {
+        other.alive = false;
+        chain.push({ fishId: other.id, x: op.x, y: op.y });
+      }
+    }
+  }
+  const bonusTrigger = await rng.bonusTriggerRoll(fish.def);
+  await win(userId, payout);
+  io.to(room.key).emit('kill', {
+    fishId: fish.id, winnerId: userId, mult, payout, bet: betValue,
+    x: pos.x, y: pos.y, isAoE: !!chain, chain, variable: !!fish.def.variable,
+    kind: fish.def.kind, name: fish.def.name,
+  });
+  if (bonusTrigger) startBonus(room, io);
+  room.fish.delete(fish.id);
+  return { killed: true, mult, payout };
+}
+
+// ============================================================ module exports
 module.exports = {
   attach(io) {
     io.on('connection', (socket) => {
-      // attach authenticated user from handshake
       const hand = socket.handshake.auth || {};
       if (!hand.id) { socket.disconnect(); return; }
       const userId = hand.id;
@@ -106,77 +223,126 @@ module.exports = {
       socket.join(room.key);
       socket.data.roomKey = room.key;
 
-      // replay current fish to the new client
       for (const f of room.fish.values()) {
         socket.emit('spawn', serializeFish(f));
       }
 
+      // ---- single-target hit (STD, HEAVY weapons) ----
       socket.on('hit', async (data, ack) => {
         if (typeof ack !== 'function') ack = () => {};
         try {
           const fid = parseInt(data && data.fishId, 10);
           const betValue = parseInt(data && data.bet, 10);
-          const boss = role === 'owner';
+          const wl = parseInt(data && data.weaponLevel, 10) || 0;
+          const weapon = WEAPON_LEVELS[wl] || WEAPON_LEVELS[0];
           if (!Number.isFinite(fid) || !Number.isFinite(betValue) || betValue <= 0) return ack({ ok: false });
           const fish = room.fish.get(fid);
           if (!fish || !fish.alive) return ack({ ok: false, reason: 'gone' });
           const pos = fishPosition(fish);
           if (!pos) return ack({ ok: false, reason: 'gone' });
-          // quick sanity: fish must be reasonably on-screen
           if (pos.x < -120 || pos.x > W + 120 || pos.y < -120 || pos.y > H + 120) return ack({ ok: false, reason: 'gone' });
 
-          // bullet validated & debited *once* at fire time on the server (we keep
-          // an optimistic model: bet is debited server-side here before the roll;
-          // the client already moved its balance optimistically at fire).
-          const debit = await mod.bet(userId, betValue);
+          const debit = await bet(userId, betValue);
           if (!debit.ok) return ack({ ok: false, reason: 'broke' });
 
-          fish.hp += betValue; // cosmetic accumulation
-          const { killed, near, p } = await rng.killRoll(fish.def, betValue, room);
-          if (!killed && near) io.to(room.key).emit('nearmiss', { fishId: fid, x: pos.x, y: pos.y });
-          if (!killed) {
-            return ack({ ok: true, killed: false });
+          const dmg = effectiveDamage(betValue, fish.def.armor || 0, weapon.armorPierce || 0);
+
+          // freeze effect (FROST weapon)
+          if (weapon.type === 'freeze' && fish.frozen <= 0) {
+            fish.frozen = (weapon.freezeDuration || 3) * 1000;
+            fish.frozenAt = Date.now();
+            io.to(room.key).emit('freeze', { fishId: fid, duration: weapon.freezeDuration || 3, x: pos.x, y: pos.y });
           }
-          // ---- KILL ----
-          fish.alive = false;
-          let mult = fish.def.mult;
-          if (fish.def.variable) mult = rng.rollVariableMult(fish.def);
-          let payout = mult * betValue;
-          // AoE chain: visually clears nearby fish; player paid the single bundled mult
-          let chain = null;
-          if (fish.def.special === 'aoe') {
-            chain = [];
-            for (const other of room.fish.values()) {
-              if (other === fish || !other.alive || other.boss) continue;
-              const op = fishPosition(other);
-              if (!op) continue;
-              if (Math.hypot(op.x - pos.x, op.y - pos.y) < 260) {
-                other.alive = false;
-                chain.push({ fishId: other.id, x: op.x, y: op.y });
-              }
+
+          // shared boss HP
+          if (fish.def.sharedHp) {
+            fish.currentHp -= dmg;
+            fish.hp += dmg;
+            io.to(room.key).emit('bossDamage', { fishId: fid, hp: fish.currentHp, maxHp: fish.def.sharedHp, x: pos.x, y: pos.y, dmg });
+            if (fish.currentHp > 0) {
+              return ack({ ok: true, killed: false, dmg });
             }
+            const result = await handleBossKill(fish, userId, betValue, pos, room, io, weapon);
+            return ack({ ok: true, ...result, near: false, dmg });
           }
-          // bonus trigger?
-          let bonusTrigger = await rng.bonusTriggerRoll(fish.def);
-          const killEvent = {
-            fishId: fid, winnerId: userId, mult, payout, bet: betValue,
-            x: pos.x, y: pos.y, isAoE: !!chain, chain, variable: !!fish.def.variable,
-            kind: fish.def.kind, name: fish.def.name,
-          };
-          // credit the win
-          await mod.win(userId, payout);
-          io.to(room.key).emit('kill', killEvent);
-          if (bonusTrigger) startBonus(room, io);
-          room.fish.delete(fid);
-          ack({ ok: true, killed: true, mult, payout, near: false });
+
+          fish.hp += dmg;
+          const { killed, near } = await rng.killRoll(fish.def, dmg, room);
+          if (!killed && near) io.to(room.key).emit('nearmiss', { fishId: fid, x: pos.x, y: pos.y });
+          if (!killed) return ack({ ok: true, killed: false, dmg });
+
+          const result = await handleNormalKill(fish, userId, betValue, pos, room, io);
+          ack({ ok: true, ...result, near: false, dmg });
         } catch (e) {
           console.error('[hit error]', e && e.message);
           ack({ ok: false, reason: 'error' });
         }
       });
 
+      // ---- multi-target hit (SPREAD, PIERCE weapons) ----
+      socket.on('multiHit', async (data, ack) => {
+        if (typeof ack !== 'function') ack = () => {};
+        try {
+          const fishIds = (data && data.fishIds) || [];
+          const betValue = parseInt(data && data.bet, 10);
+          const wl = parseInt(data && data.weaponLevel, 10) || 0;
+          const weapon = WEAPON_LEVELS[wl] || WEAPON_LEVELS[0];
+          if (weapon.type !== 'spread' && weapon.type !== 'pierce') return ack({ ok: false, reason: 'weapon' });
+          if (!Number.isFinite(betValue) || betValue <= 0 || !Array.isArray(fishIds) || fishIds.length === 0) return ack({ ok: false });
+          const uniqueIds = [...new Set(fishIds.map(id => parseInt(id, 10)).filter(Number.isFinite))];
+          const maxTargets = weapon.type === 'spread' ? (weapon.spreadCount || 3) : (weapon.pierceTargets || 5);
+          if (uniqueIds.length === 0 || uniqueIds.length > maxTargets) return ack({ ok: false, reason: 'targets' });
+
+          const debit = await bet(userId, betValue);
+          if (!debit.ok) return ack({ ok: false, reason: 'broke' });
+
+          const results = [];
+          for (const id of uniqueIds) {
+            const fish = room.fish.get(id);
+            if (!fish || !fish.alive) continue;
+            const pos = fishPosition(fish);
+            if (!pos) continue;
+            if (pos.x < -120 || pos.x > W + 120 || pos.y < -120 || pos.y > H + 120) continue;
+
+            const dmg = effectiveDamage(betValue, fish.def.armor || 0, weapon.armorPierce || 0);
+
+            // freeze effect
+            if (weapon.type === 'freeze' && fish.frozen <= 0) {
+              fish.frozen = (weapon.freezeDuration || 3) * 1000;
+              fish.frozenAt = Date.now();
+              io.to(room.key).emit('freeze', { fishId: id, duration: weapon.freezeDuration || 3, x: pos.x, y: pos.y });
+            }
+
+            fish.hp += dmg;
+
+            // shared boss HP
+            if (fish.def.sharedHp) {
+              fish.currentHp -= dmg;
+              io.to(room.key).emit('bossDamage', { fishId: id, hp: fish.currentHp, maxHp: fish.def.sharedHp, x: pos.x, y: pos.y, dmg });
+              if (fish.currentHp <= 0) {
+                const result = await handleBossKill(fish, userId, betValue, pos, room, io, weapon);
+                results.push({ fishId: id, ...result });
+              }
+              continue;
+            }
+
+            const { killed, near } = await rng.killRoll(fish.def, dmg, room);
+            if (!killed && near) io.to(room.key).emit('nearmiss', { fishId: id, x: pos.x, y: pos.y });
+            if (killed) {
+              const result = await handleNormalKill(fish, userId, betValue, pos, room, io);
+              results.push({ fishId: id, ...result });
+            } else {
+              results.push({ fishId: id, killed: false, dmg });
+            }
+          }
+          ack({ ok: true, results });
+        } catch (e) {
+          console.error('[multiHit error]', e && e.message);
+          ack({ ok: false, reason: 'error' });
+        }
+      });
+
       socket.on('fire', async (data, ack) => {
-        // server-side fire-rate cap per socket (defends against spam)
         if (typeof ack !== 'function') ack = () => {};
         const now = Date.now();
         const last = socket.data.lastFire || 0;
@@ -185,15 +351,16 @@ module.exports = {
         const minGap = FIRE_INTERVAL * fireMult * 1000 * 0.7;
         if (now - last < minGap) return ack({ ok: false, reason: 'toofast' });
         socket.data.lastFire = now;
-        // bet for this fire = base beat * weapon costMult (but the actual debit
-        // happens on hit to keep one atomic path; here we just ack OK so the
-        // client renders the bullet). Balance is debited per hit.
         ack({ ok: true, weaponLevel: wl });
       });
 
       socket.on('selectWeapon', (lvl) => {
         socket.data.weaponLevel = Math.max(0, Math.min(WEAPON_LEVELS.length - 1, parseInt(lvl, 10) || 0));
         socket.emit('weapon', socket.data.weaponLevel);
+      });
+
+      socket.on('miniGamePick', (choice) => {
+        resolveMiniGame(userId, choice, io);
       });
 
       socket.on('disconnect', () => {
@@ -203,84 +370,49 @@ module.exports = {
     });
   },
 
-  broadcastBalance(userId, balance) {
-    const set = sockets.get(userId);
-    if (set) for (const s of set) s.emit('balance', { points: balance });
-  },
-
-  kickUser(userId, reason) {
-    const set = sockets.get(userId);
-    if (set) { for (const s of set) s.emit('banned', { reason }); set.forEach(s => s.disconnect()); sockets.delete(userId); }
-  },
-
+  broadcastBalance,
+  kickUser,
   invalidateSettings() { rng.invalidate(); },
+
+  startTick(io) {
+    if (this._tickHandle) return;
+    this._tickHandle = setInterval(() => tickAll(io), TICK_MS);
+  },
+
+  serializeFish,
+  spawnFish,
+  pickSpecies,
 };
 
-// bonus round: high-volatility surge for ~30s; capped by RTP loop overall
-function startBonus(room, io) {
-  room.bonusTimer = 30;
-  io.to(room.key).emit('bonusStart', { duration: 30 });
-  // mini-game: pick one of 3 chests. Server pre-decides prize from RTP-controlled dist.
-  // (player triggers are broadcast; each player gets one mini-game pick via REST-ish protocol.)
-  io.to(room.key).emit('miniGame', { choices: [0, 1, 2], prompt: 'Pick a chest!' });
-  setTimeout(() => {
-    room.bonusTimer = 0;
-    io.to(room.key).emit('bonusEnd');
-  }, 30000);
-}
-
-// a player picks a chest -> server rolls prize, credits, broadcasts result
-async function resolveMiniGame(userId, choiceIndex, io) {
-  // prize distribution: EV bounded by RTP; choices cosmetic (equal EV).
-  // 70% small (50-200), 25% medium (300-700), 5% huge (1000-3000)
-  const r = Math.random();
-  let prize;
-  if (r < 0.70) prize = 50 + Math.floor(Math.random() * 151);
-  else if (r < 0.95) prize = 300 + Math.floor(Math.random() * 401);
-  else prize = 1000 + Math.floor(Math.random() * 2001);
-  await mod.win(userId, prize);
-  const set = sockets.get(userId);
-  if (set) for (const s of set) s.emit('miniGameResult', { choice: choiceIndex, prize, win: prize });
-  // mini-game prizes are treated as bonus wins (counted in roomStats paid)
-  const room = getRoom('default');
-  await db.roomStatsAdd(room.key, 0, prize);
-}
-
-const mod = module.exports;
-mod.resolveMiniGame = resolveMiniGame;
-
 // ============================================================ room tick
-// a server-side interval spawns fish and periodically recomputes the allowance.
-const db = require('../db');
-
-function serializeFish(f) {
-  return {
-    fishId: f.id, typeId: f.def.id, def: stripDef(f.def),
-    path: f.path, age: Date.now() - f.tStart, dur: f.dur, boss: !!f.boss,
-  };
-}
-function stripDef(def) {
-  const d = { ...def };
-  return d;
-}
-
 function tickAll(io) {
   for (const room of rooms.values()) {
-    roomSpawn(room, io);
+    roomTick(room, io);
     roomController(room);
   }
 }
 
-function roomSpawn(room, io) {
-  // despawn fish that have left the screen
+function roomTick(room, io) {
   const now = Date.now();
+  const dt = TICK_MS / 1000;
+
   for (const [id, f] of room.fish) {
     if (!f.alive) { room.fish.delete(id); continue; }
+    // tick freeze
+    if (f.frozen > 0) {
+      f.frozen -= TICK_MS;
+      if (f.frozen <= 0) {
+        f.frozen = 0;
+        const frozenT = (f.frozenAt - f.tStart) / f.dur;
+        f.tStart = now - frozenT * f.dur;
+      }
+    }
     const elapsed = (now - f.tStart) / f.dur;
     if (elapsed >= 1.05) { room.fish.delete(id); io.to(room.key).emit('despawn', { fishId: id }); }
   }
+
   // spawn regular fish
-  room.spawnTimer -= TICK_MS / 1000;
+  room.spawnTimer -= dt;
   const aliveCount = [...room.fish.values()].filter(f => f.alive && !f.boss).length;
   const target = room.bonusTimer > 0 ? 22 : 16;
   if (room.spawnTimer <= 0 && aliveCount < target + 6) {
@@ -288,55 +420,28 @@ function roomSpawn(room, io) {
     io.to(room.key).emit('spawn', serializeFish(f));
     room.spawnTimer = aliveCount < target ? (0.15 + Math.random() * 0.35) : (0.7 + Math.random() * 0.9);
   }
+
   // boss cadence
-  room.bossTimer -= TICK_MS / 1000;
+  room.bossTimer -= dt;
   if (room.bossTimer <= 0 && ![...room.fish.values()].some(f => f.boss)) {
     const f = spawnBoss(room);
     io.to(room.key).emit('spawn', serializeFish(f));
     io.to(room.key).emit('banner', { text: '⚠ ' + f.def.name + ' ⚠' });
+    if (f.def.sharedHp) io.to(room.key).emit('bossHp', { fishId: f.id, hp: f.currentHp, maxHp: f.def.sharedHp, name: f.def.name });
     room.bossTimer = 60 + Math.random() * 30;
   }
+
+  // bonus timer
+  if (room.bonusTimer > 0) room.bonusTimer -= dt;
 }
 
 async function roomController(room) {
   room.stateTimer -= TICK_MS / 1000;
   if (room.stateTimer > 0) return;
-  room.stateTimer = 2; // recompute every ~2s
+  room.stateTimer = 2;
   try {
     const stats = await db.roomStatsGet(room.key);
     const s = await rng.loadSettings();
     room.allowance = rng.computeAllowance(stats, s.rtp, room.allowance);
-  } catch (e) { /* ignore transient db errors in the controller */ }
+  } catch (e) { /* ignore */ }
 }
-
-const TICK_MS = 500;
-let tickHandle = null;
-function startTick(io) {
-  if (tickHandle) return;
-  tickHandle = setInterval(() => tickAll(io), TICK_MS);
-}
-
-// bet & win helpers (used by the hit handler): debits/credits via db.
-const mod2 = {
-  async bet(userId, amount) {
-    const r = await db.adjustPoints(userId, -amount, { type: 'bet', note: 'wager' });
-    if (!r.ok) return { ok: false };
-    await db.roomStatsAdd('default', amount, 0);
-    module.exports.broadcastBalance(userId, r.balance);
-    return { ok: true, balance: r.balance };
-  },
-  async win(userId, amount) {
-    const r = await db.adjustPoints(userId, amount, { type: 'win', note: 'payout' });
-    if (r.ok) {
-      await db.roomStatsAdd('default', 0, amount);
-      module.exports.broadcastBalance(userId, r.balance);
-    }
-    return r;
-  },
-};
-mod.bet = mod2.bet;
-mod.win = mod2.win;
-mod.startTick = startTick;
-mod.serializeFish = serializeFish;
-mod.spawnFish = spawnFish;
-mod.pickSpecies = pickSpecies;

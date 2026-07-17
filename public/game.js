@@ -10,13 +10,13 @@ const FIRE_INTERVAL = 0.14;              // seconds between shots when holding
 const BULLET_SPEED = 640;
 const MAX_BOUNCES = 3;
 
-// Weapon levels (higher = bigger cost/visuals/fire rate; EV-per-point unchanged).
+// Weapon levels — each has a unique mechanic (mirrors server constants.js).
 const WEAPON_LEVELS = [
-  { name: 'STD',  costMult: 1,  fireMult: 1.0,  sizeMult: 1.0, color: '#ffd54a' },
-  { name: 'PWR',  costMult: 2,  fireMult: 0.85, sizeMult: 1.2, color: '#ff9a3a' },
-  { name: 'HEAVY',costMult: 5,  fireMult: 0.7,  sizeMult: 1.5, color: '#ff5a3a' },
-  { name: 'LASER',costMult: 10, fireMult: 0.6,  sizeMult: 1.8, color: '#c83aff' },
-  { name: 'NOVA', costMult: 20, fireMult: 0.5,  sizeMult: 2.2, color: '#3affff' },
+  { name: 'STD',    type: 'single',  costMult: 1,  fireMult: 1.0,  sizeMult: 1.0, color: '#ffd54a', desc: 'Standard cannon' },
+  { name: 'SPREAD', type: 'spread',   costMult: 2,  fireMult: 0.9,  sizeMult: 1.0, color: '#ff9a3a', desc: '3-shot fan', spreadCount: 3, spreadAngle: 0.18 },
+  { name: 'PIERCE', type: 'pierce',   costMult: 4,  fireMult: 0.8,  sizeMult: 0.9, color: '#ff5a3a', desc: 'Piercing beam', pierceTargets: 5, armorPierce: 0.5 },
+  { name: 'FROST',  type: 'freeze',   costMult: 6,  fireMult: 0.6,  sizeMult: 1.1, color: '#6acaff', desc: 'Freezes target', freezeDuration: 3.0, armorPierce: 0.3 },
+  { name: 'HEAVY',  type: 'heavy',    costMult: 12, fireMult: 0.45, sizeMult: 1.6, color: '#c83aff', desc: 'Massive damage', armorPierce: 0.8 },
 ];
 
 // ---- fish species table (must mirror server/game/fishTypes.js) ----
@@ -26,29 +26,29 @@ const WEAPON_LEVELS = [
 // kind  : which painter to use
 // special: 'aoe' triggers a fullscreen chain; 'bonus' triggers a bonus round.
 const SPECIES = [
-  { id: 'guppy',    name: 'Reef Guppy',    mult: 2,   weight: 25, r: 20, speed: 110, kind: 'fish',   body: '#ff9d3c', belly: '#ffe0b0', fin: '#ff6a00', stripe: '#e05a00' },
-  { id: 'neon',     name: 'Neon Tetra',    mult: 3,   weight: 21, r: 22, speed: 120, kind: 'fish',   body: '#3ec9ff', belly: '#d5f4ff', fin: '#0f7fd0', stripe: '#ff4d6d' },
-  { id: 'angel',    name: 'Angelfish',     mult: 4,   weight: 17, r: 26, speed: 95,  kind: 'fish',   body: '#ffd23c', belly: '#fff3c0', fin: '#e0a000', stripe: '#7a5200' },
-  { id: 'clown',    name: 'Clownfish',     mult: 5,   weight: 14, r: 26, speed: 105, kind: 'fish',   body: '#ff7330', belly: '#ffd9c0', fin: '#d84e10', stripe: '#ffffff' },
-  { id: 'puffer',   name: 'Pufferfish',    mult: 7,   weight: 10, r: 30, speed: 70,  kind: 'puffer', body: '#c9e265', belly: '#f2ffd0', fin: '#8aa63c', stripe: '#5d7522' },
-  { id: 'mandarin', name: 'Coral Mandarinfish', mult: 9, weight: 9, r: 30, speed: 100, kind: 'mandarin', body: '#1f6dff', belly: '#7dffd8', fin: '#ff8c1a', stripe: '#ffb63c', glow: '#4ec9ff' },
-  { id: 'turtle',   name: 'Rune Turtle',   mult: 12,  weight: 7,  r: 38, speed: 55,  kind: 'turtle', body: '#3da35d', belly: '#cfe8b0', fin: '#2c7a44', stripe: '#1e5c31' },
-  { id: 'serpray',  name: 'Emerald Serpent-Ray', mult: 16, weight: 5.5, r: 48, speed: 80, kind: 'serpentray', body: '#12a352', belly: '#8affc0', fin: '#0a6e36', stripe: '#ffd23c', glow: '#4dff9a' },
-  { id: 'sword',    name: 'Swordfish',     mult: 20,  weight: 5,  r: 42, speed: 150, kind: 'fish',   body: '#7f9bb5', belly: '#e6f0f8', fin: '#5a7690', stripe: '#3e556b', nose: true },
-  { id: 'octomage', name: 'Gilded Octo-Mage', mult: 25, weight: 4, r: 44, speed: 60, kind: 'octomage', body: '#8a4fd0', belly: '#d9b6ff', fin: '#5c2fa0', stripe: '#ffcf4a', glow: '#c86bff' },
-  { id: 'thunder',  name: 'Thunder Hammerhead', mult: 35, weight: 3, r: 54, speed: 100, kind: 'thundershark', body: '#3d5a80', belly: '#dbe8f5', fin: '#28415f', stripe: '#ffd23c', hammer: true, glow: '#9fd8ff' },
-  { id: 'shark',    name: 'Tiger Shark',   mult: 45,  weight: 2.5,r: 60, speed: 100, kind: 'shark',  body: '#6e8494', belly: '#dbe6ec', fin: '#51636f', stripe: '#3a4a54' },
-  { id: 'crab',     name: 'Bomb Crab',     mult: 12,  weight: 3,  r: 34, speed: 45,  kind: 'crab',   body: '#e0483c', belly: '#ffb09e', fin: '#a82f26', stripe: '#701d17', special: 'aoe' },
-  { id: 'dragonkoi',name: 'Emperor Dragon-Koi', mult: 60, weight: 1.4, r: 42, speed: 120, kind: 'dragonkoi', body: '#c92a4e', belly: '#ffd98a', fin: '#ff8c1a', stripe: '#ffcf24', glow: '#ff9a2a' },
-  { id: 'whale',    name: 'Blue Whale',    mult: 80,  weight: 0.8,r: 78, speed: 45,  kind: 'whale',  body: '#4a7ba6', belly: '#cfe2f0', fin: '#35597a', stripe: '#27435c' },
-  { id: 'laser',    name: 'Laser Crab',     mult: 60,  weight: 1.0, r: 40, speed: 50,  kind: 'crab',   body: '#b048e0', belly: '#ffb0ff', fin: '#7a2fa0', stripe: '#33ddff', special: 'aoe', laser: true },
-  { id: 'eel',      name: 'Electric Eel',   mult: 90,  weight: 0.9, r: 46, speed: 75,  kind: 'serpentray', body: '#7adfff', belly: '#e6fbff', fin: '#3aa0c8', stripe: '#ffea3a', special: 'aoe', glow: '#aef6ff' },
-  { id: 'pearl',    name: 'Bonus Pearl',    mult: 5,   weight: 0.6, r: 28, speed: 80,  kind: 'puffer', body: '#fff3a0', belly: '#ffffff', fin: '#ffcf4a', stripe: '#ff9a3a', special: 'bonus', glow: '#fff6c8' },
+  { id: 'guppy',    name: 'Reef Guppy',    mult: 2,   weight: 25, r: 20, speed: 110, armor: 0,  kind: 'fish',   body: '#ff9d3c', belly: '#ffe0b0', fin: '#ff6a00', stripe: '#e05a00' },
+  { id: 'neon',     name: 'Neon Tetra',    mult: 3,   weight: 21, r: 22, speed: 120, armor: 0,  kind: 'fish',   body: '#3ec9ff', belly: '#d5f4ff', fin: '#0f7fd0', stripe: '#ff4d6d' },
+  { id: 'angel',    name: 'Angelfish',     mult: 4,   weight: 17, r: 26, speed: 95,  armor: 0,  kind: 'fish',   body: '#ffd23c', belly: '#fff3c0', fin: '#e0a000', stripe: '#7a5200' },
+  { id: 'clown',    name: 'Clownfish',     mult: 5,   weight: 14, r: 26, speed: 105, armor: 0,  kind: 'fish',   body: '#ff7330', belly: '#ffd9c0', fin: '#d84e10', stripe: '#ffffff' },
+  { id: 'puffer',   name: 'Pufferfish',    mult: 7,   weight: 10, r: 30, speed: 70,  armor: 1,  kind: 'puffer', body: '#c9e265', belly: '#f2ffd0', fin: '#8aa63c', stripe: '#5d7522' },
+  { id: 'mandarin', name: 'Coral Mandarinfish', mult: 9, weight: 9, r: 30, speed: 100, armor: 1, kind: 'mandarin', body: '#1f6dff', belly: '#7dffd8', fin: '#ff8c1a', stripe: '#ffb63c', glow: '#4ec9ff' },
+  { id: 'turtle',   name: 'Rune Turtle',   mult: 12,  weight: 7,  r: 38, speed: 55,  armor: 4,  kind: 'turtle', body: '#3da35d', belly: '#cfe8b0', fin: '#2c7a44', stripe: '#1e5c31' },
+  { id: 'serpray',  name: 'Emerald Serpent-Ray', mult: 16, weight: 5.5, r: 48, speed: 80, armor: 3, kind: 'serpentray', body: '#12a352', belly: '#8affc0', fin: '#0a6e36', stripe: '#ffd23c', glow: '#4dff9a' },
+  { id: 'sword',    name: 'Swordfish',     mult: 20,  weight: 5,  r: 42, speed: 150, armor: 2,  kind: 'fish',   body: '#7f9bb5', belly: '#e6f0f8', fin: '#5a7690', stripe: '#3e556b', nose: true },
+  { id: 'octomage', name: 'Gilded Octo-Mage', mult: 25, weight: 4, r: 44, speed: 60, armor: 5,  kind: 'octomage', body: '#8a4fd0', belly: '#d9b6ff', fin: '#5c2fa0', stripe: '#ffcf4a', glow: '#c86bff' },
+  { id: 'thunder',  name: 'Thunder Hammerhead', mult: 35, weight: 3, r: 54, speed: 100, armor: 6, kind: 'thundershark', body: '#3d5a80', belly: '#dbe8f5', fin: '#28415f', stripe: '#ffd23c', hammer: true, glow: '#9fd8ff' },
+  { id: 'shark',    name: 'Tiger Shark',   mult: 45,  weight: 2.5,r: 60, speed: 100, armor: 8,  kind: 'shark',  body: '#6e8494', belly: '#dbe6ec', fin: '#51636f', stripe: '#3a4a54' },
+  { id: 'crab',     name: 'Bomb Crab',     mult: 12,  weight: 3,  r: 34, speed: 45,  armor: 3,  kind: 'crab',   body: '#e0483c', belly: '#ffb09e', fin: '#a82f26', stripe: '#701d17', special: 'aoe' },
+  { id: 'dragonkoi',name: 'Emperor Dragon-Koi', mult: 60, weight: 1.4, r: 42, speed: 120, armor: 10, kind: 'dragonkoi', body: '#c92a4e', belly: '#ffd98a', fin: '#ff8c1a', stripe: '#ffcf24', glow: '#ff9a2a' },
+  { id: 'whale',    name: 'Blue Whale',    mult: 80,  weight: 0.8,r: 78, speed: 45,  armor: 15, kind: 'whale',  body: '#4a7ba6', belly: '#cfe2f0', fin: '#35597a', stripe: '#27435c' },
+  { id: 'laser',    name: 'Laser Crab',     mult: 60,  weight: 1.0, r: 40, speed: 50,  armor: 12, kind: 'crab',   body: '#b048e0', belly: '#ffb0ff', fin: '#7a2fa0', stripe: '#33ddff', special: 'aoe', laser: true },
+  { id: 'eel',      name: 'Electric Eel',   mult: 90,  weight: 0.9, r: 46, speed: 75,  armor: 14, kind: 'eel',    body: '#7adfff', belly: '#e6fbff', fin: '#3aa0c8', stripe: '#ffea3a', special: 'aoe', glow: '#aef6ff' },
+  { id: 'pearl',    name: 'Bonus Pearl',    mult: 5,   weight: 0.6, r: 28, speed: 80,  armor: 0,  kind: 'pearl',  body: '#fff3a0', belly: '#ffffff', fin: '#ffcf4a', stripe: '#ff9a3a', special: 'bonus', glow: '#fff6c8' },
 ];
 
-const BOSS = { id: 'kraken', name: 'KRAKEN', mult: 120, r: 80, speed: 55, kind: 'abysslord', body: '#5a4a8a', belly: '#c0a0ff', fin: '#3a2a6a', stripe: '#ffd23c', boss: true };
+const BOSS = { id: 'kraken', name: 'KRAKEN', mult: 120, r: 80, speed: 55, kind: 'abysslord', tier: 'mega', armor: 20, body: '#5a4a8a', belly: '#c0a0ff', fin: '#3a2a6a', stripe: '#ffd23c', boss: true, sharedHp: 800 };
 const VARIABLE_BOSSES = [
-  { id: 'goldendragon', name: 'GOLDEN DRAGON', multRange: [100, 500], expectedMult: 300, r: 76, speed: 60, kind: 'dragonkoi', body: '#ffcf24', belly: '#fff3a0', fin: '#e09010', stripe: '#a05a00', glow: '#ffe680', boss: true, variable: true },
+  { id: 'goldendragon', name: 'GOLDEN DRAGON', multRange: [100, 500], expectedMult: 300, r: 76, speed: 60, kind: 'dragonkoi', tier: 'mega', armor: 25, body: '#ffcf24', belly: '#fff3a0', fin: '#e09010', stripe: '#a05a00', glow: '#ffe680', boss: true, variable: true, sharedHp: 1200 },
 ];
 
 // lookup tables: typeId -> def (for spawns received from the server)
@@ -94,7 +94,7 @@ const state = {
   aim: { x: W / 2, y: H / 2 - 100 },
   fireCooldown: 0,
   time: 0,
-  fish: [],              // {id, def, path, age, dur, receivedAt, x, y, angle, wag, flash, boss}
+  fish: [],              // {id, def, path, age, dur, receivedAt, x, y, angle, wag, flash, boss, frozenUntil}
   bullets: [],
   nets: [],
   coins: [],
@@ -110,6 +110,13 @@ const state = {
   miniGamePending: false,
   connected: false,
   banned: false,
+  // lock-on targeting
+  lockedFishId: null,
+  // shared boss HP
+  bossHp: null,          // { fishId, hp, maxHp, name }
+  // multi-hit tracking (pierce bullets collect hits before removing)
+  volleys: new Map(),    // volleyId -> { hits: Set<fishId>, weaponLevel, bet }
+  nextVolleyId: 1,
 };
 
 const bet = () => BETS[state.betIdx];
@@ -150,8 +157,9 @@ function buildWeaponRow() {
   WEAPON_LEVELS.forEach((wl, i) => {
     const b = document.createElement('button');
     b.className = 'weapon-btn' + (i === state.weaponLevel ? ' on' : '');
-    b.textContent = `L${i + 1}`;
-    b.title = `${wl.name} (${wl.costMult}× bet)`;
+    b.textContent = wl.name;
+    b.title = `${wl.desc} (${wl.costMult}× bet)`;
+    b.style.color = wl.color;
     b.onclick = () => { state.weaponLevel = i; if (socket) socket.emit('selectWeapon', i); SFX.click(); buildWeaponRow(); refreshHUD(); };
     hud.weaponRow.appendChild(b);
   });
@@ -246,6 +254,13 @@ canvas.addEventListener('pointerdown', e => {
   SFX.unlock();
   const p = pointerPos(e);
   state.aim = p;
+  // lock-on: tap a fish to focus fire, tap empty space to clear
+  const tapped = pickFishAt(p.x, p.y);
+  if (tapped) {
+    state.lockedFishId = tapped.id;
+  } else {
+    state.lockedFishId = null;
+  }
   state.firing = true;
 });
 canvas.addEventListener('pointermove', e => { state.aim = pointerPos(e); });
@@ -281,16 +296,25 @@ function bezierTangent(p, t) {
 function addFishFromServer(s) {
   const def = FISH_BY_ID[s.typeId];
   if (!def) return;
-  // avoid duplicate ids on reconnect/replay
   if (state.fish.some(f => f.id === s.fishId)) return;
-  state.fish.push({
+  const fish = {
     id: s.fishId, def, path: s.path, age: s.age, dur: s.dur,
     receivedAt: Date.now(),
     x: s.path[0].x, y: s.path[0].y, angle: 0,
     wag: rand(0, 6.28), flash: 0,
     boss: !!def.boss, dying: 0,
-  });
-  if (def.boss) { SFX.bossAlert(); }
+    frozenUntil: 0,      // client-side freeze timer
+    frozenElapsed: 0,
+    currentHp: s.currentHp || 0,
+    maxHp: s.maxHp || 0,
+  };
+  state.fish.push(fish);
+  if (def.boss) {
+    SFX.bossAlert();
+    if (fish.maxHp > 0) {
+      state.bossHp = { fishId: fish.id, hp: fish.currentHp, maxHp: fish.maxHp, name: def.name };
+    }
+  }
 }
 
 function removeFish(fishId) {
@@ -303,6 +327,15 @@ function cannonPos() { return { x: W / 2, y: H - 58 }; }
 
 function cannonAngle() {
   const c = cannonPos();
+  // if locked onto a fish, aim at it
+  if (state.lockedFishId !== null) {
+    const locked = state.fish.find(f => f.id === state.lockedFishId);
+    if (locked && !locked.dying) {
+      const a = Math.atan2(locked.y - c.y, locked.x - c.x);
+      return clamp(a, -Math.PI + 0.25, -0.25);
+    }
+    state.lockedFishId = null; // fish died or left
+  }
   const a = Math.atan2(state.aim.y - c.y, state.aim.x - c.x);
   return clamp(a, -Math.PI + 0.25, -0.25);
 }
@@ -320,45 +353,103 @@ function tryFire() {
   const a = cannonAngle();
   const muzzle = 52;
   const wl = WEAPON_LEVELS[state.weaponLevel];
-  state.bullets.push({
-    x: c.x + Math.cos(a) * muzzle,
-    y: c.y + Math.sin(a) * muzzle,
-    vx: Math.cos(a) * BULLET_SPEED,
-    vy: Math.sin(a) * BULLET_SPEED,
-    bet: cost,
-    weaponLevel: state.weaponLevel,
-    bounces: 0,
-    r: (13 + state.betIdx * 2) * wl.sizeMult,
-    color: wl.color,
-    flick: rand(0, 6.28),
-    trail: [],
-    owner: true,
-  });
-  // muzzle flash particles
-  const flashColors = [wl.color, '#ff8c1a', '#ff5a1a'];
-  for (let i = 0; i < 9; i++) {
-    state.particles.push({
-      x: c.x + Math.cos(a) * muzzle, y: c.y + Math.sin(a) * muzzle,
-      vx: Math.cos(a + rand(-0.5, 0.5)) * rand(80, 260),
-      vy: Math.sin(a + rand(-0.5, 0.5)) * rand(80, 260),
-      life: 0.25, maxLife: 0.25, r: rand(2.5, 6), color: flashColors[i % 3],
+  const bulletR = (13 + state.betIdx * 2) * wl.sizeMult;
+
+  function makeBullet(angle, opts = {}) {
+    const volleyId = opts.volleyId || 0;
+    state.bullets.push({
+      x: c.x + Math.cos(angle) * muzzle,
+      y: c.y + Math.sin(angle) * muzzle,
+      vx: Math.cos(angle) * BULLET_SPEED,
+      vy: Math.sin(angle) * BULLET_SPEED,
+      bet: cost,
+      weaponLevel: state.weaponLevel,
+      bounces: 0,
+      r: opts.r || bulletR,
+      color: wl.color,
+      flick: rand(0, 6.28),
+      trail: [],
+      owner: true,
+      pierceRemaining: opts.pierceRemaining || 0,
+      volleyId: volleyId,
+      hitFishIds: new Set(),
     });
   }
+
+  const flashColors = [wl.color, '#ff8c1a', '#ff5a1a'];
+  function muzzleFlash(ax) {
+    for (let i = 0; i < 6; i++) {
+      state.particles.push({
+        x: c.x + Math.cos(ax) * muzzle, y: c.y + Math.sin(ax) * muzzle,
+        vx: Math.cos(ax + rand(-0.5, 0.5)) * rand(80, 260),
+        vy: Math.sin(ax + rand(-0.5, 0.5)) * rand(80, 260),
+        life: 0.25, maxLife: 0.25, r: rand(2.5, 6), color: flashColors[i % 3],
+      });
+    }
+  }
+
+  if (wl.type === 'spread') {
+    const count = wl.spreadCount || 3;
+    const halfAngle = wl.spreadAngle || 0.18;
+    const vid = state.nextVolleyId++;
+    state.volleys.set(vid, { hits: new Set(), weaponLevel: state.weaponLevel, bet: cost, total: count, resolved: 0 });
+    for (let i = 0; i < count; i++) {
+      const offset = (i - (count - 1) / 2) * halfAngle;
+      makeBullet(a + offset, { volleyId: vid });
+    }
+    muzzleFlash(a);
+  } else if (wl.type === 'pierce') {
+    const vid = state.nextVolleyId++;
+    state.volleys.set(vid, { hits: new Set(), weaponLevel: state.weaponLevel, bet: cost, total: 1, resolved: 0 });
+    makeBullet(a, { pierceRemaining: wl.pierceTargets || 5, volleyId: vid });
+    muzzleFlash(a);
+  } else {
+    // single, freeze, heavy — one bullet, direct hit
+    makeBullet(a);
+    muzzleFlash(a);
+  }
+
   SFX.shoot();
-  // tell the server we fired (rate-capped server-side); it acks but the actual
-  // death check happens on 'hit' when the bullet collides.
   socket.emit('fire', { weaponLevel: state.weaponLevel });
   refreshHUD();
 }
 
-// a client-side bullet hits an alive fish -> emit 'hit' to the server, which
-// atomically debits the bet, rolls the death check, and (if killed) broadcasts
-// a 'kill' that drives the credit + VFX. We remove the bullet locally regardless.
+// a client-side bullet hits an alive fish
 function hitFish(fish, bullet) {
   fish.flash = 0.12;
   SFX.hit();
   state.nets.push({ x: bullet.x, y: bullet.y, r: 10, max: 46 + bullet.bet * 0.6 + fish.def.r * 0.6, life: 0.35, maxLife: 0.35 });
-  socket.emit('hit', { fishId: fish.id, bet: bullet.bet, weaponLevel: bullet.weaponLevel });
+
+  if (bullet.volleyId && state.volleys.has(bullet.volleyId)) {
+    // multi-hit volley (spread/pierce): collect the hit, don't send yet
+    const v = state.volleys.get(bullet.volleyId);
+    v.hits.add(fish.id);
+    if (bullet.pierceRemaining > 0) {
+      // pierce: bullet continues, decrement remaining
+      bullet.pierceRemaining--;
+      if (bullet.pierceRemaining <= 0) {
+        // pierce exhausted — remove bullet and flush volley
+        bullet.remove = true;
+        flushVolley(v, bullet.volleyId);
+      }
+    } else {
+      // spread: bullet stops on hit
+      bullet.remove = true;
+      v.resolved++;
+      if (v.resolved >= v.total) flushVolley(v, bullet.volleyId);
+    }
+  } else {
+    // single/freeze/heavy: direct hit event
+    socket.emit('hit', { fishId: fish.id, bet: bullet.bet, weaponLevel: bullet.weaponLevel });
+    bullet.remove = true;
+  }
+}
+
+function flushVolley(v, vid) {
+  if (v.hits.size > 0) {
+    socket.emit('multiHit', { fishIds: [...v.hits], bet: v.bet, weaponLevel: v.weaponLevel });
+  }
+  state.volleys.delete(vid);
 }
 
 // ---- server-kill handler: drives the credit + the celebration VFX ----
@@ -458,9 +549,26 @@ function update(dt) {
       if (f.dying <= 0) state.fish.splice(i, 1);
       continue;
     }
+    // clear lock if fish is dead
+    if (state.lockedFishId === f.id && (f.dying || f.def.r === undefined)) {
+      state.lockedFishId = null;
+    }
+    // frozen fish don't move client-side
+    if (f.frozenUntil > now) {
+      f.wag += dt * 2; // slow idle wiggle
+      if (f.flash > 0) f.flash -= dt;
+      continue;
+    }
+    if (f.frozenUntil) {
+      // Resume from the same path point at which the server froze this fish.
+      f.age = f.frozenElapsed;
+      f.receivedAt = now;
+      f.frozenUntil = 0;
+    }
+    // unfrozen: compute position from age
     const elapsed = f.age + (now - f.receivedAt);
     const t = elapsed / f.dur;
-    if (t >= 1.05) { state.fish.splice(i, 1); continue; }   // off-screen
+    if (t >= 1.05) { state.fish.splice(i, 1); continue; }
     const tc = clamp(t, 0, 1);
     const pos = bezier(f.path, tc);
     const tan = bezierTangent(f.path, tc);
@@ -493,15 +601,35 @@ function update(dt) {
     if (b.x < b.r) { b.x = b.r; b.vx = Math.abs(b.vx); bounced = true; }
     if (b.x > W - b.r) { b.x = W - b.r; b.vx = -Math.abs(b.vx); bounced = true; }
     if (b.y < b.r) { b.y = b.r; b.vy = Math.abs(b.vy); bounced = true; }
-    if (bounced && ++b.bounces > MAX_BOUNCES) { state.bullets.splice(i, 1); continue; }
-    if (b.y > H + 40) { state.bullets.splice(i, 1); continue; }
+    if (bounced && ++b.bounces > MAX_BOUNCES) {
+      // volley bullet expired on bounce limit
+      if (b.volleyId && state.volleys.has(b.volleyId)) {
+        const v = state.volleys.get(b.volleyId);
+        v.resolved++;
+        if (v.resolved >= v.total) flushVolley(v, b.volleyId);
+      }
+      state.bullets.splice(i, 1); continue;
+    }
+    if (b.y > H + 40) {
+      if (b.volleyId && state.volleys.has(b.volleyId)) {
+        const v = state.volleys.get(b.volleyId);
+        v.resolved++;
+        if (v.resolved >= v.total) flushVolley(v, b.volleyId);
+      }
+      state.bullets.splice(i, 1); continue;
+    }
+
+    // bullet marked for removal by hitFish (pierce exhausted)
+    if (b.remove) { state.bullets.splice(i, 1); continue; }
 
     // collision with an alive fish -> notify server (it does the death check)
     for (const f of state.fish) {
       if (f.dying) continue;
+      if (b.hitFishIds.has(f.id)) continue;
       if (Math.hypot(f.x - b.x, f.y - b.y) < f.def.r + b.r) {
+        b.hitFishIds.add(f.id);
         hitFish(f, b);
-        state.bullets.splice(i, 1);
+        if (b.remove) { state.bullets.splice(i, 1); }
         break;
       }
     }
@@ -1548,6 +1676,7 @@ const PAINTERS = {
   shark: paintShark, crab: paintCrab, whale: paintWhale,
   mandarin: paintMandarin, octomage: paintOcto, thundershark: paintThunderShark,
   dragonkoi: paintDragonKoi, abysslord: paintAbyssLord,
+  eel: paintSerpentRay, pearl: paintPuffer,
 };
 
 // ============================================================ render
@@ -1635,6 +1764,7 @@ function drawBackground() {
 }
 
 function drawFishAll() {
+  const now = Date.now();
   for (const f of state.fish) {
     g.save();
     g.translate(f.x, f.y);
@@ -1670,6 +1800,84 @@ function drawFishAll() {
       g.globalCompositeOperation = 'source-over';
     }
     g.restore();
+
+    // ---- freeze VFX: ice crystals around frozen fish ----
+    if (f.frozenUntil > now) {
+      g.save();
+      g.translate(f.x, f.y);
+      const freezeAlpha = 0.5 + 0.2 * Math.sin(state.time * 6);
+      g.globalAlpha = freezeAlpha;
+      g.strokeStyle = '#6acaff';
+      g.lineWidth = 2.5;
+      // ice shard ring
+      for (let j = 0; j < 6; j++) {
+        const sa = (j / 6) * Math.PI * 2 + state.time * 1.5;
+        const sr = f.def.r * 1.2 + Math.sin(state.time * 4 + j) * 4;
+        const sx = Math.cos(sa) * sr, sy = Math.sin(sa) * sr;
+        g.beginPath();
+        g.moveTo(sx, sy - 6); g.lineTo(sx + 3, sy + 2); g.lineTo(sx - 3, sy + 2);
+        g.closePath();
+        g.fillStyle = '#a0e8ff';
+        g.fill();
+        g.stroke();
+      }
+      // frost glow
+      g.globalCompositeOperation = 'lighter';
+      g.globalAlpha = 0.12 + 0.06 * Math.sin(state.time * 3);
+      const frostG = g.createRadialGradient(0, 0, f.def.r * 0.3, 0, 0, f.def.r * 1.5);
+      frostG.addColorStop(0, 'rgba(160,230,255,0.6)');
+      frostG.addColorStop(1, 'rgba(80,180,220,0)');
+      g.fillStyle = frostG;
+      g.beginPath(); g.arc(0, 0, f.def.r * 1.5, 0, Math.PI * 2); g.fill();
+      g.restore();
+    }
+
+    // ---- lock-on reticle ----
+    if (state.lockedFishId === f.id && !f.dying) {
+      g.save();
+      g.translate(f.x, f.y);
+      const rr = f.def.r + 10 + 3 * Math.sin(state.time * 8);
+      g.strokeStyle = '#ff3a3a';
+      g.lineWidth = 2.5;
+      g.globalAlpha = 0.85;
+      // targeting circle
+      g.beginPath(); g.arc(0, 0, rr, 0, Math.PI * 2); g.stroke();
+      // crosshairs
+      const ch = rr + 8;
+      for (const [cx, cy] of [[ch, 0], [-ch, 0], [0, ch], [0, -ch]]) {
+        g.beginPath(); g.moveTo(cx * 0.7, cy * 0.7); g.lineTo(cx, cy); g.stroke();
+      }
+      g.restore();
+    }
+
+    // ---- armor indicator ----
+    if ((f.def.armor || 0) > 0 && !f.dying) {
+      g.save();
+      g.translate(f.x, f.y);
+      const ax = f.def.r + 6, ay = f.def.r + 2;
+      g.fillStyle = '#c0d0e0';
+      g.globalAlpha = 0.8;
+      // small shield
+      g.beginPath();
+      g.moveTo(ax, ay - 8);
+      g.lineTo(ax + 7, ay - 4);
+      g.lineTo(ax + 7, ay + 3);
+      g.lineTo(ax, ay + 8);
+      g.lineTo(ax - 7, ay + 3);
+      g.lineTo(ax - 7, ay - 4);
+      g.closePath();
+      g.fill();
+      g.strokeStyle = '#8899aa';
+      g.lineWidth = 1.5;
+      g.stroke();
+      // armor number
+      g.fillStyle = '#334';
+      g.globalAlpha = 0.9;
+      g.font = 'bold 9px Arial';
+      g.textAlign = 'center';
+      g.fillText(f.def.armor, ax, ay + 4);
+      g.restore();
+    }
 
     // multiplier tag
     if (!f.dying) {
@@ -1878,6 +2086,36 @@ function drawAimLine() {
   g.restore();
 }
 
+function drawBossHpBar() {
+  if (!state.bossHp || state.bossHp.hp <= 0) return;
+  const bh = state.bossHp;
+  const barW = 500, barH = 22;
+  const x = (W - barW) / 2, y = 28;
+  const ratio = clamp(bh.hp / bh.maxHp, 0, 1);
+  // background
+  g.fillStyle = 'rgba(0,0,0,0.6)';
+  g.beginPath(); g.roundRect(x - 4, y - 4, barW + 8, barH + 26, 8); g.fill();
+  // name
+  g.font = 'bold 14px Arial';
+  g.textAlign = 'center';
+  g.fillStyle = '#ffd54a';
+  g.fillText(bh.name, W / 2, y + 14);
+  // bar background
+  g.fillStyle = '#2a1a0a';
+  g.beginPath(); g.roundRect(x, y + 20, barW, barH, 4); g.fill();
+  // bar fill
+  const hpColor = ratio > 0.5 ? '#ff5a3a' : ratio > 0.25 ? '#ffaa3a' : '#ff3a3a';
+  const grad = g.createLinearGradient(x, 0, x + barW * ratio, 0);
+  grad.addColorStop(0, hpColor);
+  grad.addColorStop(1, ratio > 0.5 ? '#ff8c1a' : '#ff5a3a');
+  g.fillStyle = grad;
+  g.beginPath(); g.roundRect(x, y + 20, barW * ratio, barH, 4); g.fill();
+  // HP text
+  g.font = 'bold 12px Arial';
+  g.fillStyle = '#fff';
+  g.fillText(Math.max(0, Math.ceil(bh.hp)) + ' / ' + bh.maxHp, W / 2, y + 20 + barH - 5);
+}
+
 function render() {
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.fillStyle = '#01080f';
@@ -1900,6 +2138,7 @@ function render() {
   drawCoins();
   drawTexts();
   drawCannon();
+  drawBossHpBar();
 
   // bonus mode tint
   if (state.bonusActive) {
@@ -1985,7 +2224,13 @@ async function init() {
   socket.on('disconnect', () => { state.connected = false; });
   socket.on('spawn', addFishFromServer);
   socket.on('despawn', d => removeFish(d.fishId));
-  socket.on('kill', k => onServerKill(k));
+  socket.on('kill', k => {
+    onServerKill(k);
+    // clear boss HP bar if the killed fish was the tracked boss
+    if (state.bossHp && state.bossHp.fishId === k.fishId) {
+      state.bossHp = null;
+    }
+  });
   socket.on('nearmiss', nm => onNearMiss(nm));
   socket.on('balance', b => { state.balance = b.points; });
   socket.on('banner', b => banner(b.text));
@@ -1994,7 +2239,30 @@ async function init() {
   socket.on('miniGame', d => showMiniGame(d));
   socket.on('miniGameResult', r => onMiniGameResult(r));
   socket.on('banned', () => { state.banned = true; location.href = '/auth'; });
-  socket.on('error', () => { /* manager/banned handshake errors */ if (!state.banned) location.href = '/auth'; });
+  socket.on('error', () => { if (!state.banned) location.href = '/auth'; });
+  // new game mechanic events
+  socket.on('freeze', f => {
+    const fish = state.fish.find(x => x.id === f.fishId);
+    if (fish) {
+      const now = Date.now();
+      fish.frozenElapsed = fish.age + (now - fish.receivedAt);
+      fish.frozenUntil = now + f.duration * 1000;
+    }
+  });
+  socket.on('bossDamage', bd => {
+    if (state.bossHp && state.bossHp.fishId === bd.fishId) {
+      state.bossHp.hp = bd.hp;
+    }
+    const fish = state.fish.find(x => x.id === bd.fishId);
+    if (fish) {
+      fish.currentHp = bd.hp;
+      fish.flash = 0.08;
+      state.nets.push({ x: bd.x, y: bd.y, r: 8, max: 30 + bd.dmg * 0.3, life: 0.3, maxLife: 0.3 });
+    }
+  });
+  socket.on('bossHp', bh => {
+    state.bossHp = { fishId: bh.fishId, hp: bh.hp, maxHp: bh.maxHp, name: bh.name };
+  });
 
   // debug exports (handy for the test harness; harmless in prod)
   window.__fk = { state, socket, myUserId, SFX, addFishFromServer, onServerKill };

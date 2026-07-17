@@ -7,14 +7,14 @@ const FIRE_INTERVAL = 0.14;             // seconds between shots when holding
 const BULLET_SPEED = 640;
 const MAX_BOUNCES = 3;
 
-// Weapon levels — higher = bigger cost/visuals/fire rate, same EV per point.
-// level: 0..4. cost multiplier applied to base bet; fire interval shrinks.
+// Weapon levels — each has a unique mechanic, not just stat scaling.
+// type: 'single' | 'spread' | 'pierce' | 'freeze' | 'heavy'
 const WEAPON_LEVELS = [
-  { level: 0, name: 'STD',  costMult: 1,  fireMult: 1.0,  sizeMult: 1.0, color: '#ffd54a' },
-  { level: 1, name: 'PWR',  costMult: 2,  fireMult: 0.85, sizeMult: 1.2, color: '#ff9a3a' },
-  { level: 2, name: 'HEAVY',costMult: 5,  fireMult: 0.7,  sizeMult: 1.5, color: '#ff5a3a' },
-  { level: 3, name: 'LASER',costMult: 10, fireMult: 0.6,  sizeMult: 1.8, color: '#c83aff' },
-  { level: 4, name: 'NOVA', costMult: 20, fireMult: 0.5,  sizeMult: 2.2, color: '#3affff' },
+  { level: 0, name: 'STD',    type: 'single',  costMult: 1,  fireMult: 1.0,  sizeMult: 1.0, color: '#ffd54a', desc: 'Standard cannon' },
+  { level: 1, name: 'SPREAD', type: 'spread',   costMult: 2,  fireMult: 0.9,  sizeMult: 1.0, color: '#ff9a3a', desc: '3-shot fan', spreadCount: 3, spreadAngle: 0.18 },
+  { level: 2, name: 'PIERCE', type: 'pierce',   costMult: 4,  fireMult: 0.8,  sizeMult: 0.9, color: '#ff5a3a', desc: 'Piercing beam', pierceTargets: 5, armorPierce: 0.5 },
+  { level: 3, name: 'FROST',  type: 'freeze',   costMult: 6,  fireMult: 0.6,  sizeMult: 1.1, color: '#6acaff', desc: 'Freezes target', freezeDuration: 3.0, armorPierce: 0.3 },
+  { level: 4, name: 'HEAVY',  type: 'heavy',    costMult: 12, fireMult: 0.45, sizeMult: 1.6, color: '#c83aff', desc: 'Massive damage', armorPierce: 0.8 },
 ];
 
 const FISH_TIERS = {
