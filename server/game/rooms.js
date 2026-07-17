@@ -256,7 +256,7 @@ const db = require('../db');
 function serializeFish(f) {
   return {
     fishId: f.id, typeId: f.def.id, def: stripDef(f.def),
-    path: f.path, tStart: f.tStart, dur: f.dur, boss: !!f.boss,
+    path: f.path, age: Date.now() - f.tStart, dur: f.dur, boss: !!f.boss,
   };
 }
 function stripDef(def) {

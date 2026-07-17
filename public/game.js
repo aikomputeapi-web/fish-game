@@ -94,7 +94,7 @@ const state = {
   aim: { x: W / 2, y: H / 2 - 100 },
   fireCooldown: 0,
   time: 0,
-  fish: [],              // {id, def, path, tStart, dur, x, y, angle, wag, flash, boss}
+  fish: [],              // {id, def, path, age, dur, receivedAt, x, y, angle, wag, flash, boss}
   bullets: [],
   nets: [],
   coins: [],
@@ -284,7 +284,8 @@ function addFishFromServer(s) {
   // avoid duplicate ids on reconnect/replay
   if (state.fish.some(f => f.id === s.fishId)) return;
   state.fish.push({
-    id: s.fishId, def, path: s.path, tStart: s.tStart, dur: s.dur,
+    id: s.fishId, def, path: s.path, age: s.age, dur: s.dur,
+    receivedAt: Date.now(),
     x: s.path[0].x, y: s.path[0].y, angle: 0,
     wag: rand(0, 6.28), flash: 0,
     boss: !!def.boss, dying: 0,
@@ -448,7 +449,7 @@ function update(dt) {
   const wantFire = state.firing || state.auto;
   if (wantFire) tryFire();
 
-  // fish movement — server owns the path; we interpolate from tStart/dur.
+  // fish movement — server owns the path; we interpolate from age/dur using local time.
   const now = Date.now();
   for (let i = state.fish.length - 1; i >= 0; i--) {
     const f = state.fish[i];
@@ -457,7 +458,8 @@ function update(dt) {
       if (f.dying <= 0) state.fish.splice(i, 1);
       continue;
     }
-    const t = (now - f.tStart) / f.dur;
+    const elapsed = f.age + (now - f.receivedAt);
+    const t = elapsed / f.dur;
     if (t >= 1.05) { state.fish.splice(i, 1); continue; }   // off-screen
     const tc = clamp(t, 0, 1);
     const pos = bezier(f.path, tc);
