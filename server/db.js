@@ -73,6 +73,10 @@ function buildMigrations() {
        id ${PK},
        username TEXT NOT NULL UNIQUE,
        password_hash TEXT NOT NULL,
+       email TEXT,
+       email_verified BOOLEAN NOT NULL DEFAULT false,
+       verify_token TEXT,
+       verify_expires ${TS},
        points BIGINT NOT NULL DEFAULT 2000,
        role TEXT NOT NULL DEFAULT 'player',
        manager_id INTEGER,
@@ -120,6 +124,10 @@ const MIGRATIONS = buildMigrations();
 const SAFEMIGRATIONS = [
   "ALTER TABLE users ADD COLUMN manager_id INTEGER",
   "ALTER TABLE users ADD COLUMN banned BOOLEAN NOT NULL DEFAULT false",
+  "ALTER TABLE users ADD COLUMN email TEXT",
+  "ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT false",
+  "ALTER TABLE users ADD COLUMN verify_token TEXT",
+  `ALTER TABLE users ADD COLUMN verify_expires ${TS}`,
 ];
 
 async function migrate() {
@@ -131,6 +139,8 @@ async function migrate() {
   }
   // rename admin -> owner if any legacy rows exist
   try { await exec("UPDATE users SET role = 'owner' WHERE role = 'admin'"); } catch (e) {}
+  // case-insensitive email uniqueness (partial index so legacy NULL emails are fine)
+  try { await exec("CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email)) WHERE email IS NOT NULL"); } catch (e) { console.warn('[email index skip]', e.message); }
   await seedOwner();
   await seedDefaults();
 }
@@ -175,6 +185,18 @@ async function getUser(id) {
 async function getUserByName(username) {
   return one("SELECT * FROM users WHERE lower(username) = lower(?)", [username]);
 }
+async function getUserByEmail(email) {
+  return one("SELECT * FROM users WHERE lower(email) = lower(?)", [email]);
+}
+async function getUserByVerifyToken(token) {
+  return one("SELECT * FROM users WHERE verify_token = ?", [token]);
+}
+async function setVerifyToken(id, token, expiresIso) {
+  await exec("UPDATE users SET verify_token = ?, verify_expires = ? WHERE id = ?", [token, expiresIso, id]);
+}
+async function markEmailVerified(id) {
+  await exec("UPDATE users SET email_verified = true, verify_token = NULL, verify_expires = NULL WHERE id = ?", [id]);
+}
 async function listUsers() {
   return q(
     "SELECT u.id, u.username, u.points, u.role, u.banned, u.created_at, u.last_login, " +
@@ -182,11 +204,11 @@ async function listUsers() {
     "FROM users u LEFT JOIN users m ON u.manager_id = m.id ORDER BY u.created_at DESC"
   );
 }
-async function createUser(username, passwordHash) {
+async function createUser(username, passwordHash, { email = null, verifyToken = null, verifyExpires = null } = {}) {
   const bonus = parseInt(process.env.SIGNUP_BONUS || '2000', 10);
   return q(
-    "INSERT INTO users (username, password_hash, points, role) VALUES (?, ?, ?, 'player') RETURNING id",
-    [username, passwordHash, bonus]
+    "INSERT INTO users (username, password_hash, email, verify_token, verify_expires, points, role) VALUES (?, ?, ?, ?, ?, ?, 'player') RETURNING id",
+    [username, passwordHash, email, verifyToken, verifyExpires, bonus]
   ).then(async (rows) => {
     const id = rows[0].id;
     await q("INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'signup_bonus', ?, ?, 'signup')", [id, bonus, bonus]);
@@ -198,128 +220,120 @@ async function touchLogin(id) {
   await exec("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?", [id]);
 }
 
-// ============================================================ points ledger
-// adjustPoints: single-account, atomic conditional (used by bets/wins/owner grants).
-// amount is signed; positive adds, negative subtracts (with funds guard if negative).
-// Returns { balance, ok } or { ok: false } if a debit failed for insufficient funds.
-async function adjustPoints(userId, amount, { type, adminId = null, managerId = null, note = null } = {}) {
-  if (amount === 0) {
-    const u = await getUser(userId);
-    return { balance: u ? u.points : 0, ok: true };
-  }
+// ============================================================ transactions
+// withTransaction(fn) runs `fn(tx)` inside one atomic transaction on either
+// engine. `tx.query(sql, params)` uses ? placeholders and returns rows, just
+// like q() — but bound to this transaction's connection (pg) or the shared
+// sqlite handle. Committing on normal return; rolling back on any throw.
+//
+// To roll back but still return a value (e.g. a failed money guard that has
+// already written a row this transaction), call rollback(value): it unwinds
+// the transaction and withTransaction returns `value` instead of throwing.
+class Rollback { constructor(value) { this.value = value; } }
+function rollback(value) { throw new Rollback(value); }
+
+async function withTransaction(fn) {
   if (ENGINE === 'pg') {
     const client = await pgPool.connect();
+    const tx = {
+      async query(sql, params = []) {
+        const { rows } = await client.query(convertSql(sql), params);
+        return rows;
+      },
+    };
     try {
       await client.query('BEGIN');
-      let newBal;
-      if (amount < 0) {
-        const r = await client.query(
-          "UPDATE users SET points = points + $1 WHERE id = $2 AND points + $1 >= 0 RETURNING points",
-          [amount, userId]
-        );
-        if (r.rowCount === 0) { await client.query('ROLLBACK'); return { ok: false, reason: 'insufficient' }; }
-        newBal = r.rows[0].points;
-      } else {
-        const r = await client.query(
-          "UPDATE users SET points = points + $1 WHERE id = $2 RETURNING points",
-          [amount, userId]
-        );
-        if (r.rowCount === 0) { await client.query('ROLLBACK'); return { ok: false, reason: 'no_user' }; }
-        newBal = r.rows[0].points;
-      }
-      await client.query(
-        "INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        [userId, type, amount, newBal, adminId, managerId, note]
-      );
+      const result = await fn(tx);
       await client.query('COMMIT');
-      return { balance: newBal, ok: true };
+      return result;
     } catch (e) {
       try { await client.query('ROLLBACK'); } catch (_) {}
+      if (e instanceof Rollback) return e.value;
       throw e;
     } finally {
       client.release();
     }
   } else {
-    // sqlite: synchronous transaction
+    // sqlite (node:sqlite) is synchronous and single-connection: q() runs on
+    // the same handle, so it participates in this BEGIN IMMEDIATE...COMMIT.
+    const tx = { query: (sql, params = []) => q(sql, params) };
     sqliteDb.exec('BEGIN IMMEDIATE');
     try {
-      const cur = sqliteDb.prepare("SELECT points FROM users WHERE id = ?").get(userId);
-      if (!cur) { sqliteDb.exec('ROLLBACK'); return { ok: false, reason: 'no_user' }; }
-      const np = cur.points + amount;
-      if (np < 0) { sqliteDb.exec('ROLLBACK'); return { ok: false, reason: 'insufficient' }; }
-      sqliteDb.prepare("UPDATE users SET points = ? WHERE id = ?").run(np, userId);
-      sqliteDb.prepare(
-        "INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES (?,?,?,?,?,?,?)"
-      ).run(userId, type, amount, np, adminId, managerId, note);
+      const result = await fn(tx);
       sqliteDb.exec('COMMIT');
-      return { balance: np, ok: true };
+      return result;
     } catch (e) {
       try { sqliteDb.exec('ROLLBACK'); } catch (_) {}
+      if (e instanceof Rollback) return e.value;
       throw e;
     }
   }
 }
 
+// ============================================================ points ledger
+// adjustPoints: single-account, atomic conditional (used by bets/wins/owner grants).
+// amount is signed; positive adds, negative subtracts (with funds guard if negative).
+// Returns { balance, ok } or { ok: false } if a debit failed for insufficient funds.
+// A failed debit affects zero rows and writes nothing, so it needs no rollback.
+async function adjustPoints(userId, amount, { type, adminId = null, managerId = null, note = null } = {}) {
+  if (amount === 0) {
+    const u = await getUser(userId);
+    return { balance: u ? u.points : 0, ok: true };
+  }
+  return withTransaction(async (tx) => {
+    let rows;
+    if (amount < 0) {
+      rows = await tx.query(
+        "UPDATE users SET points = points + ? WHERE id = ? AND points + ? >= 0 RETURNING points",
+        [amount, userId, amount]
+      );
+      if (rows.length === 0) return { ok: false, reason: 'insufficient' };
+    } else {
+      rows = await tx.query(
+        "UPDATE users SET points = points + ? WHERE id = ? RETURNING points",
+        [amount, userId]
+      );
+      if (rows.length === 0) return { ok: false, reason: 'no_user' };
+    }
+    const newBal = rows[0].points;
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES (?,?,?,?,?,?,?)",
+      [userId, type, amount, newBal, adminId, managerId, note]
+    );
+    return { balance: newBal, ok: true };
+  });
+}
+
 // transferPoints: two-account atomic, zero-sum. Debit `fromId`, credit `toId`.
 // amount > 0. Fails if `fromId` has insufficient points. Logs a row on each side.
+// If the credit target is missing, the debit already happened — rollback() undoes it.
 async function transferPoints(fromId, toId, amount, type, meta = {}) {
   if (amount <= 0) throw new Error('amount must be positive');
   if (fromId === toId) throw new Error('cannot transfer to self');
   const { adminId = null, managerId = null, note = null } = meta;
-  if (ENGINE === 'pg') {
-    const client = await pgPool.connect();
-    try {
-      await client.query('BEGIN');
-      const dr = await client.query(
-        "UPDATE users SET points = points - $1 WHERE id = $2 AND points - $1 >= 0 RETURNING points",
-        [amount, fromId]
-      );
-      if (dr.rowCount === 0) { await client.query('ROLLBACK'); return { ok: false, reason: 'insufficient' }; }
-      const fromBal = dr.rows[0].points;
-      const cr = await client.query(
-        "UPDATE users SET points = points + $1 WHERE id = $2 RETURNING points",
-        [amount, toId]
-      );
-      if (cr.rowCount === 0) { await client.query('ROLLBACK'); return { ok: false, reason: 'no_user' }; }
-      const toBal = cr.rows[0].points;
-      await client.query(
-        "INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        [fromId, type, -amount, fromBal, adminId, managerId, `to:${meta.counterparty}`]
-      );
-      await client.query(
-        "INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        [toId, type, amount, toBal, adminId, managerId, `from:${meta.counterparty}`]
-      );
-      await client.query('COMMIT');
-      return { ok: true, fromBalance: fromBal, toBalance: toBal };
-    } catch (e) {
-      try { await client.query('ROLLBACK'); } catch (_) {}
-      throw e;
-    } finally {
-      client.release();
-    }
-  } else {
-    sqliteDb.exec('BEGIN IMMEDIATE');
-    try {
-      const f = sqliteDb.prepare("SELECT points FROM users WHERE id = ?").get(fromId);
-      if (!f) { sqliteDb.exec('ROLLBACK'); return { ok: false, reason: 'no_user' }; }
-      if (f.points - amount < 0) { sqliteDb.exec('ROLLBACK'); return { ok: false, reason: 'insufficient' }; }
-      const t = sqliteDb.prepare("SELECT points FROM users WHERE id = ?").get(toId);
-      if (!t) { sqliteDb.exec('ROLLBACK'); return { ok: false, reason: 'no_user' }; }
-      const fb = f.points - amount, tb = t.points + amount;
-      sqliteDb.prepare("UPDATE users SET points = ? WHERE id = ?").run(fb, fromId);
-      sqliteDb.prepare("UPDATE users SET points = ? WHERE id = ?").run(tb, toId);
-      sqliteDb.prepare("INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES (?,?,?,?,?,?,?)")
-        .run(fromId, type, -amount, fb, adminId, managerId, `to:${meta.counterparty}`);
-      sqliteDb.prepare("INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES (?,?,?,?,?,?,?)")
-        .run(toId, type, amount, tb, adminId, managerId, `from:${meta.counterparty}`);
-      sqliteDb.exec('COMMIT');
-      return { ok: true, fromBalance: fb, toBalance: tb };
-    } catch (e) {
-      try { sqliteDb.exec('ROLLBACK'); } catch (_) {}
-      throw e;
-    }
-  }
+  return withTransaction(async (tx) => {
+    const dr = await tx.query(
+      "UPDATE users SET points = points - ? WHERE id = ? AND points - ? >= 0 RETURNING points",
+      [amount, fromId, amount]
+    );
+    if (dr.length === 0) return { ok: false, reason: 'insufficient' };
+    const fromBal = dr[0].points;
+    const cr = await tx.query(
+      "UPDATE users SET points = points + ? WHERE id = ? RETURNING points",
+      [amount, toId]
+    );
+    if (cr.length === 0) return rollback({ ok: false, reason: 'no_user' });
+    const toBal = cr[0].points;
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES (?,?,?,?,?,?,?)",
+      [fromId, type, -amount, fromBal, adminId, managerId, `to:${meta.counterparty}`]
+    );
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES (?,?,?,?,?,?,?)",
+      [toId, type, amount, toBal, adminId, managerId, `from:${meta.counterparty}`]
+    );
+    return { ok: true, fromBalance: fromBal, toBalance: toBal };
+  });
 }
 
 // ============================================================ settings
@@ -388,8 +402,9 @@ async function roomStatsAdd(room, wager, payout) {
 module.exports = {
   ENGINE,
   migrate,
-  q, one, exec,
-  getUser, getUserByName, listUsers, createUser, touchLogin,
+  q, one, exec, withTransaction,
+  getUser, getUserByName, getUserByEmail, getUserByVerifyToken, setVerifyToken, markEmailVerified,
+  listUsers, createUser, touchLogin,
   adjustPoints, transferPoints,
   getSettings, getAllSettings, setSetting,
   userWageredWon, globalStats,
