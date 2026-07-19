@@ -15,9 +15,11 @@
     </div>
     <p class="auth-sub" id="auth-sub">Welcome back — sign in to keep your points balance.</p>
     <input id="f-username" type="text" placeholder="username" autocomplete="username">
+    <input id="f-email" type="email" placeholder="email" autocomplete="email" class="hidden">
     <input id="f-password" type="password" placeholder="password" autocomplete="current-password">
     <div id="auth-msg" class="auth-msg"></div>
     <button id="btn-submit" class="btn primary">LOG IN</button>
+    <button id="btn-resend" class="btn hidden" style="margin-top:8px">RESEND VERIFICATION EMAIL</button>
     <p class="auth-fine">Free-play. Virtual points only. No real money.</p>
   </div>
 <script src="/auth.js"></script>
@@ -25,30 +27,53 @@
 (function(){
   let mode = 'login';
   const elU = document.getElementById('f-username');
+  const elE = document.getElementById('f-email');
   const elP = document.getElementById('f-password');
   const elMsg = document.getElementById('auth-msg');
   const btn = document.getElementById('btn-submit');
+  const btnResend = document.getElementById('btn-resend');
   const tabL = document.getElementById('tab-login');
   const tabS = document.getElementById('tab-signup');
   const sub = document.getElementById('auth-sub');
-  function setMode(m){ mode=m; tabL.classList.toggle('on', m==='login'); tabS.classList.toggle('on', m==='signup'); btn.textContent = m==='login'?'LOG IN':'CREATE ACCOUNT'; sub.textContent = m==='login' ? 'Welcome back — sign in to keep your points balance.' : 'New players get 2,000 bonus points on signup.'; elMsg.textContent=''; }
+  function setMode(m){ mode=m; tabL.classList.toggle('on', m==='login'); tabS.classList.toggle('on', m==='signup'); elE.classList.toggle('hidden', m==='login'); btnResend.classList.add('hidden'); btn.textContent = m==='login'?'LOG IN':'CREATE ACCOUNT'; sub.textContent = m==='login' ? 'Welcome back — sign in to keep your points balance.' : 'New players get 2,000 bonus points on signup. Email verification required.'; elMsg.textContent=''; }
   tabL.onclick = () => setMode('login');
   tabS.onclick = () => setMode('signup');
+  function showMsg(text, isErr){ elMsg.textContent = text; elMsg.classList.toggle('error', !!isErr); }
   async function submit(){
-    const u = elU.value.trim(); const p = elP.value;
-    elMsg.textContent = ''; elMsg.classList.remove('error');
-    if (!u || !p){ elMsg.textContent='username and password required'; elMsg.classList.add('error'); return; }
+    const u = elU.value.trim(); const p = elP.value; const em = elE.value.trim();
+    showMsg('');
+    btnResend.classList.add('hidden');
+    if (!u || !p){ showMsg('username and password required', true); return; }
+    if (mode==='signup' && !em){ showMsg('email required', true); return; }
     btn.disabled = true; btn.textContent = '…';
     try {
-      const r = mode==='login' ? await Auth.login(u,p) : await Auth.register(u,p);
-      if (r.ok){ Auth.redirectByRole(r.data.role); }
-      else { elMsg.textContent = (r.data && r.data.error) || ('error ' + r.status); elMsg.classList.add('error'); }
-    } catch(e){ elMsg.textContent='network error'; elMsg.classList.add('error'); }
-    btn.disabled = false; setMode(mode);
+      const r = mode==='login' ? await Auth.login(u,p) : await Auth.register(u,em,p);
+      if (r.ok && r.data.pendingVerification){
+        btn.disabled = false; setMode('login');
+        showMsg('Account created — check ' + r.data.email + ' for a verification link.');
+        return;
+      }
+      if (r.ok){ Auth.redirectByRole(r.data.role); return; }
+      showMsg((r.data && r.data.error) || ('error ' + r.status), true);
+      if (r.data && r.data.needVerify) btnResend.classList.remove('hidden');
+    } catch(e){ showMsg('network error', true); }
+    btn.disabled = false; btn.textContent = mode==='login'?'LOG IN':'CREATE ACCOUNT';
   }
   btn.onclick = submit;
+  btnResend.onclick = async () => {
+    const u = elU.value.trim(); const p = elP.value;
+    if (!u || !p){ showMsg('enter your username and password first', true); return; }
+    btnResend.disabled = true;
+    try {
+      const r = await Auth.resend(u, p);
+      if (r.ok) showMsg('Verification email re-sent to ' + r.data.email + '.');
+      else showMsg((r.data && r.data.error) || ('error ' + r.status), true);
+    } catch(e){ showMsg('network error', true); }
+    btnResend.disabled = false;
+  };
   elP.addEventListener('keydown', e => { if (e.key==='Enter') submit(); });
-  elU.addEventListener('keydown', e => { if (e.key==='Enter') elP.focus(); });
+  elU.addEventListener('keydown', e => { if (e.key==='Enter') (mode==='signup' ? elE : elP).focus(); });
+  elE.addEventListener('keydown', e => { if (e.key==='Enter') elP.focus(); });
   // If already logged in, redirect to the right home.
   Auth.me().then(m => { if (m) Auth.redirectByRole(m.role); });
 })();

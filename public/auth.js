@@ -16,13 +16,21 @@ window.Auth = (() => {
     });
     return { ok: r.ok, status: r.status, data: r.ok ? await r.json() : await r.json() };
   }
-  async function register(username, password) {
+  async function register(username, email, password) {
     const r = await fetch('/api/auth/register', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, email, password }),
+    });
+    return { ok: r.ok, status: r.status, data: r.ok ? await r.json() : await r.json() };
+  }
+  async function resend(username, password) {
+    const r = await fetch('/api/auth/resend', {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
-    return { ok: r.ok, status: r.status, data: r.ok ? await r.json() : await r.json() };
+    return { ok: r.ok, status: r.status, data: await r.json() };
   }
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
@@ -34,5 +42,5 @@ window.Auth = (() => {
     else if (role === 'player') location.href = playerPath;
     else location.href = '/auth';
   }
-  return { me, login, register, logout, redirectByRole };
+  return { me, login, register, resend, logout, redirectByRole };
 })();

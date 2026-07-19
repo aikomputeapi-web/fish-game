@@ -47,6 +47,7 @@ io.use((socket, next) => {
     db.getUser(payload.id).then(u => {
       if (!u) return next(new Error('no user'));
       if (u.banned) return next(new Error('banned'));
+      if (u.email && !u.email_verified) return next(new Error('email not verified'));
       socket.handshake.auth = { id: u.id, username: u.username, role: u.role, banned: false };
       next();
     }).catch(() => next(new Error('db error')));

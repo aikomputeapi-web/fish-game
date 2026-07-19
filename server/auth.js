@@ -2,10 +2,12 @@
    requireAuth (any logged-in), requireOwner (owner only), requireManager. */
 'use strict';
 
+const crypto = require('crypto');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./db');
+const { sendVerificationEmail } = require('./mailer');
 
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const COOKIE = 'fk_token';
@@ -39,6 +41,7 @@ async function requireAuth(req, res, next) {
   const row = await db.getUser(u.id);
   if (!row) return res.status(401).json({ error: 'user not found' });
   if (row.banned) return res.status(403).json({ error: 'account banned' });
+  if (row.email && !row.email_verified) return res.status(403).json({ error: 'email not verified' });
   req.user = row;
   next();
 }
@@ -61,17 +64,63 @@ module.exports = { COOKIE, SECRET, sign, setAuthCookie, readUser, requireAuth, r
 // ---- routes ----
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+function newVerifyToken() {
+  return {
+    token: crypto.randomBytes(32).toString('hex'),
+    expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24h
+  };
+}
+
 router.post('/register', ah(async (req, res) => {
   const username = String(req.body.username || '').trim();
+  const email = String(req.body.email || '').trim();
   const password = String(req.body.password || '');
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'username must be 3-20 chars (letters, numbers, _)' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'valid email required' });
   if (password.length < 4) return res.status(400).json({ error: 'password must be at least 4 chars' });
   const existing = await db.getUserByName(username);
   if (existing) return res.status(409).json({ error: 'username already taken' });
+  const emailTaken = await db.getUserByEmail(email);
+  if (emailTaken) return res.status(409).json({ error: 'email already registered' });
   const hash = await bcrypt.hash(password, 10);
-  const user = await db.createUser(username, hash);
+  const { token, expires } = newVerifyToken();
+  const user = await db.createUser(username, hash, { email, verifyToken: token, verifyExpires: expires });
+  await sendVerificationEmail(email, username, token);
+  // no auth cookie yet — account activates once the email link is clicked
+  res.json({ id: user.id, username: user.username, pendingVerification: true, email });
+}));
+
+// email link target: verifies the account, logs the user in, sends them to the app
+router.get('/verify', ah(async (req, res) => {
+  const token = String(req.query.token || '');
+  const fail = (msg) => res.status(400).send(`<p>${msg}</p><p><a href="/auth">Back to sign in</a></p>`);
+  if (!token) return fail('Missing verification token.');
+  const user = await db.getUserByVerifyToken(token);
+  if (!user) return fail('This verification link is invalid or was already used.');
+  if (user.verify_expires && new Date(user.verify_expires).getTime() < Date.now()) {
+    return fail('This verification link has expired. Log in to request a new one.');
+  }
+  await db.markEmailVerified(user.id);
+  await db.touchLogin(user.id);
   setAuthCookie(res, user);
-  res.json({ id: user.id, username: user.username, points: user.points, role: 'player' });
+  res.redirect('/auth');
+}));
+
+// re-send the verification email; requires valid credentials so it can't be
+// used to spam arbitrary addresses
+router.post('/resend', ah(async (req, res) => {
+  const username = String(req.body.username || '').trim();
+  const password = String(req.body.password || '');
+  const user = await db.getUserByName(username);
+  if (!user) return res.status(401).json({ error: 'invalid credentials' });
+  const ok = await bcrypt.compare(password, user.password_hash);
+  if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+  if (!user.email) return res.status(400).json({ error: 'no email on this account' });
+  if (user.email_verified) return res.status(400).json({ error: 'email already verified' });
+  const { token, expires } = newVerifyToken();
+  await db.setVerifyToken(user.id, token, expires);
+  await sendVerificationEmail(user.email, user.username, token);
+  res.json({ ok: true, email: user.email });
 }));
 
 router.post('/login', ah(async (req, res) => {
@@ -83,6 +132,10 @@ router.post('/login', ah(async (req, res) => {
   if (user.banned) return res.status(403).json({ error: 'account banned' });
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+  // accounts with an email must verify it first (legacy email-less accounts are grandfathered)
+  if (user.email && !user.email_verified) {
+    return res.status(403).json({ error: 'please verify your email before logging in', needVerify: true });
+  }
   await db.touchLogin(user.id);
   setAuthCookie(res, user);
   res.json({ id: user.id, username: user.username, points: user.points, role: user.role, managerId: user.manager_id });

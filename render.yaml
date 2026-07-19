@@ -18,6 +18,21 @@ services:
         value: changeme123
       - key: SIGNUP_BONUS
         value: "2000"
+      # public URL used in email verification links — set to your Render URL
+      - key: APP_URL
+        value: https://fire-kirin-dev.onrender.com
+      # SMTP for verification emails; set values in the Render dashboard.
+      # If SMTP_HOST is unset, links are logged to the service console instead.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: firekirin-db

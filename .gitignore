@@ -6,5 +6,9 @@ node_modules/
 dist/
 .DS_Store
 Thumbs.db
+# local dev database (regenerated on first run)
+dev.sqlite
+dev.sqlite-wal
+dev.sqlite-shm
 # gstack (global install)
 .amazonq/rules/gstack.md
