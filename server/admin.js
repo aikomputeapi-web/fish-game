@@ -56,8 +56,11 @@ router.post('/users/:id/role', ah(async (req, res) => {
   const target = await db.getUser(id);
   if (!target) return res.status(404).json({ error: 'user not found' });
   if (target.role === 'owner') return res.status(400).json({ error: 'cannot change owner role' });
-  await db.exec("UPDATE users SET role = ? WHERE id = ?", [role, id]);
-  if (role === 'player') rooms.kickUser(id, 'demoted'); // drop live manager session if was manager
+  const result = await db.changeUserRole(id, role);
+  if (!result.ok) return res.status(409).json({ error: 'role changed concurrently; refresh and try again' });
+  // Existing sockets retain their authenticated role for their lifetime.
+  // Force a reconnect for both promotion and demotion so the new role applies.
+  if (result.changed) rooms.kickUser(id, role === 'manager' ? 'promoted' : 'demoted');
   res.json({ id, role });
 }));
 

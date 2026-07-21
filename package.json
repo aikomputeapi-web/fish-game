@@ -8,10 +8,11 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "simulate": "node scripts/simulate.js"
+    "simulate": "node scripts/simulate.js",
+    "test": "node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

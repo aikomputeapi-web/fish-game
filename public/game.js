@@ -9,6 +9,9 @@ const BETS = [1, 2, 5, 10, 20, 50, 100];
 const FIRE_INTERVAL = 0.14;              // seconds between shots when holding
 const BULLET_SPEED = 640;
 const MAX_BOUNCES = 3;
+const requestedGameMode = new URLSearchParams(location.search).get('mode') === 'multiplayer'
+  ? 'multiplayer'
+  : 'solo';
 
 // Weapon levels — each has a unique mechanic (mirrors server constants.js).
 const WEAPON_LEVELS = [
@@ -109,6 +112,8 @@ const state = {
   bonusActive: false,
   miniGamePending: false,
   connected: false,
+  roomReady: false,
+  gameMode: requestedGameMode,
   banned: false,
   // lock-on targeting
   lockedFishId: null,
@@ -140,6 +145,7 @@ const hud = {
   betUp: el('bet-up'), betDown: el('bet-down'),
   weaponRow: el('weapon-row'),
   authBar: el('auth-bar'), authUser: el('auth-user'), btnLogout: el('btn-logout'),
+  solo: el('btn-solo'), multiplayer: el('btn-multiplayer'), matchStatus: el('match-status'),
   msg: el('msg-layer'),
   mega: el('mega-layer'),
   mini: el('mini-layer'),
@@ -149,6 +155,49 @@ function refreshHUD() {
   hud.balance.textContent = Math.floor(state.displayBalance).toLocaleString();
   hud.win.textContent = Math.floor(state.totalWin).toLocaleString();
   hud.bet.textContent = bet() * WEAPON_LEVELS[state.weaponLevel].costMult;
+}
+
+function selectGameMode(mode) {
+  if (mode === state.gameMode) return;
+  location.href = mode === 'multiplayer' ? '/game?mode=multiplayer' : '/game';
+}
+
+function updateGameModeUI(room = null) {
+  hud.solo.classList.toggle('on', state.gameMode === 'solo');
+  hud.multiplayer.classList.toggle('on', state.gameMode === 'multiplayer');
+  if (!room) {
+    hud.matchStatus.textContent = state.gameMode === 'multiplayer' ? 'MATCHMAKING…' : 'SOLO · READY';
+    return;
+  }
+  if (room.status === 'waiting') {
+    hud.matchStatus.textContent = `MATCHMAKING · ${room.queued || 1}/${room.required || 4}`;
+    return;
+  }
+  hud.matchStatus.textContent = room.mode === 'multiplayer'
+    ? `MULTIPLAYER · ${(room.players || []).length}/${room.required || 4}`
+    : 'SOLO · READY';
+}
+
+function applyRoomState(room) {
+  state.gameMode = room.mode === 'multiplayer' ? 'multiplayer' : 'solo';
+  state.roomReady = room.status === 'active';
+  if (room.reset) {
+    state.fish = [];
+    state.bullets = [];
+    state.volleys.clear();
+    state.lockedFishId = null;
+    state.bossHp = null;
+    state.bonusActive = false;
+  }
+  if (!state.roomReady) {
+    state.firing = false;
+    state.auto = false;
+    hud.auto.classList.remove('on');
+  } else if (room.mode === 'multiplayer' && room.reset) {
+    banner('MATCH FOUND · 4 PLAYERS');
+    SFX.bossAlert();
+  }
+  updateGameModeUI(room);
 }
 
 // weapon selector buttons
@@ -186,6 +235,8 @@ hud.auto.addEventListener('click', () => {
   hud.auto.classList.toggle('on', state.auto);
   SFX.click();
 });
+hud.solo.addEventListener('click', () => selectGameMode('solo'));
+hud.multiplayer.addEventListener('click', () => selectGameMode('multiplayer'));
 hud.redeem.addEventListener('click', openRedeemModal);
 hud.sound.addEventListener('click', () => {
   hud.sound.textContent = SFX.toggle() ? '🔊' : '🔇';
@@ -345,7 +396,7 @@ function shotBet() { return bet() * WEAPON_LEVELS[state.weaponLevel].costMult; }
 
 function tryFire() {
   if (state.fireCooldown > 0) return;
-  if (!state.connected) { SFX.denied(); state.firing = false; state.auto = false; hud.auto.classList.remove('on'); return; }
+  if (!state.connected || !state.roomReady) { SFX.denied(); state.firing = false; state.auto = false; hud.auto.classList.remove('on'); return; }
   const cost = shotBet();
   if (state.balance < cost) { if (!state.auto) SFX.denied(); state.firing = false; state.auto = false; hud.auto.classList.remove('on'); refreshHUD(); return; }
   state.fireCooldown = FIRE_INTERVAL * WEAPON_LEVELS[state.weaponLevel].fireMult;
@@ -2200,6 +2251,7 @@ function onMiniGameResult(r) {
 async function init() {
   buildWeaponRow();
   refreshHUD();
+  updateGameModeUI();
   requestAnimationFrame(frame);
 
   // auth gate
@@ -2219,9 +2271,10 @@ async function init() {
   refreshHUD();
 
   // connect socket (cookie auth handled server-side)
-  socket = io({ withCredentials: true });
-  socket.on('connect', () => { state.connected = true; });
-  socket.on('disconnect', () => { state.connected = false; });
+  socket = io({ withCredentials: true, auth: { gameMode: requestedGameMode } });
+  socket.on('connect', () => { state.connected = true; state.roomReady = false; updateGameModeUI(); });
+  socket.on('disconnect', () => { state.connected = false; state.roomReady = false; updateGameModeUI(); });
+  socket.on('roomState', applyRoomState);
   socket.on('spawn', addFishFromServer);
   socket.on('despawn', d => removeFish(d.fishId));
   socket.on('kill', k => {

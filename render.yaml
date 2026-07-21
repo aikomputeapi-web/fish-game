@@ -10,12 +10,14 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22.22.2
+      - key: NODE_ENV
+        value: production
       - key: JWT_SECRET
         generateValue: true
       - key: ADMIN_USERNAME
         value: admin
       - key: ADMIN_PASSWORD
-        value: changeme123
+        sync: false
       - key: SIGNUP_BONUS
         value: "2000"
       # public URL used in email verification links — set to your Render URL

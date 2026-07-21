@@ -35,15 +35,20 @@ function readUser(req) {
 }
 
 // middleware gates
-async function requireAuth(req, res, next) {
-  const u = readUser(req);
-  if (!u) return res.status(401).json({ error: 'not authenticated' });
-  const row = await db.getUser(u.id);
-  if (!row) return res.status(401).json({ error: 'user not found' });
-  if (row.banned) return res.status(403).json({ error: 'account banned' });
-  if (row.email && !row.email_verified) return res.status(403).json({ error: 'email not verified' });
-  req.user = row;
-  next();
+function requireAuth(req, res, next) {
+  try {
+    const u = readUser(req);
+    if (!u) return res.status(401).json({ error: 'not authenticated' });
+    db.getUser(u.id).then((row) => {
+      if (!row) return res.status(401).json({ error: 'user not found' });
+      if (row.banned) return res.status(403).json({ error: 'account banned' });
+      if (row.email && !row.email_verified) return res.status(403).json({ error: 'email not verified' });
+      req.user = row;
+      next();
+    }).catch(next);
+  } catch (err) {
+    next(err);
+  }
 }
 
 function requireOwner(req, res, next) {
@@ -77,12 +82,12 @@ router.post('/register', ah(async (req, res) => {
   const password = String(req.body.password || '');
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'username must be 3-20 chars (letters, numbers, _)' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'valid email required' });
-  if (password.length < 4) return res.status(400).json({ error: 'password must be at least 4 chars' });
+  if (password.length < 8) return res.status(400).json({ error: 'password must be at least 8 chars' });
   const existing = await db.getUserByName(username);
   if (existing) return res.status(409).json({ error: 'username already taken' });
   const emailTaken = await db.getUserByEmail(email);
   if (emailTaken) return res.status(409).json({ error: 'email already registered' });
-  const hash = await bcrypt.hash(password, 10);
+  const hash = await bcrypt.hash(password, 12);
   const { token, expires } = newVerifyToken();
   const user = await db.createUser(username, hash, { email, verifyToken: token, verifyExpires: expires });
   await sendVerificationEmail(email, username, token);

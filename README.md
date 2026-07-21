@@ -13,6 +13,9 @@ API — there are no external assets and no copyrighted material.
 - **Three-tier role hierarchy** — Owner (single account, sets RTP target,
   full control) → Managers (distribute funds, approve redemptions) → Players
   (play, redeem via manager).
+- **Solo and 4-player multiplayer modes** — Solo gives each player a private
+  table. Multiplayer uses simple FIFO matchmaking: every four queued players
+  are placed into an isolated shared fish table.
 - **Closed-loop RTP control** — a proportional-integral allowance controller
   keeps realised RTP tracking the owner-set target over time. Same EV per
   point regardless of bet size or weapon level.
@@ -33,7 +36,7 @@ API — there are no external assets and no copyrighted material.
 
 | Layer | Technology |
 |---|---|
-| Server | Node.js 20+, Express, Socket.io |
+| Server | Node.js 22.13+, Express, Socket.io |
 | Database | PostgreSQL (production via Neon) / SQLite (local dev) |
 | Client | Vanilla HTML5 Canvas, Web Audio API |
 | Hosting | Render free tier (web service) + Neon Postgres (free tier) |
@@ -42,7 +45,7 @@ API — there are no external assets and no copyrighted material.
 
 ### Prerequisites
 
-- Node.js ≥ 20
+- Node.js ≥ 22.13
 - npm
 
 ### Quick start (SQLite, no database setup needed)
@@ -50,10 +53,10 @@ API — there are no external assets and no copyrighted material.
 ```bash
 npm install
 cp .env.example .env        # edit JWT_SECRET at minimum
-npm start                   # starts on port 3001
+npm start                   # starts on port 3000
 ```
 
-Open **http://localhost:3101**.
+Open **http://localhost:3000**.
 
 The default `.env.example` has no `DATABASE_URL`, so SQLite is used
 automatically (file: `dev.sqlite`).
@@ -61,8 +64,9 @@ automatically (file: `dev.sqlite`).
 ### First boot
 
 On first start the owner account is seeded from `ADMIN_USERNAME` /
-`ADMIN_PASSWORD` env vars (default: `admin` / `changeme123`). Log in at
-`/auth.html` with these credentials.
+`ADMIN_PASSWORD`. Set a strong value before the first production boot;
+production refuses the default password. Log in at `/auth.html` with those
+credentials.
 
 ### RTP simulation
 
@@ -72,6 +76,15 @@ npm run simulate
 
 Runs 200,000 shots at each RTP target (50%, 96%, 120%) and asserts
 realised RTP is within 3% of target.
+
+### Tests
+
+```bash
+npm test
+```
+
+Runs isolated SQLite transaction tests covering manager ownership, redemption
+idempotency, room-stat updates, four-player matchmaking, and server startup.
 
 ## Pages
 
@@ -86,11 +99,12 @@ realised RTP is within 3% of target.
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | 3001 | Server port |
+| `PORT` | 3000 | Server port |
 | `DATABASE_URL` | *(empty — SQLite)* | Postgres connection string |
 | `JWT_SECRET` | — | Secret for JWT tokens (change in production) |
+| `ALLOWED_ORIGINS` | `APP_URL` | Comma-separated browser origins allowed to open Socket.IO connections |
 | `ADMIN_USERNAME` | `admin` | Owner account username |
-| `ADMIN_PASSWORD` | `changeme123` | Owner account password |
+| `ADMIN_PASSWORD` | `changeme123` locally | Owner account password (must be non-default in production) |
 | `SIGNUP_BONUS` | `2000` | Points given to new player accounts |
 
 ## Code Layout
@@ -140,6 +154,8 @@ scripts/
 7. Bullets bounce off walls up to 3 times.
 8. Each hit rolls probabilistically — expected payout per hit is
    `RTP × bet × weaponCostMult`. A caught fish pays `multiplier × bet × weaponCostMult`.
+9. **MULTI** queues you until four players are ready; those four share the same
+   fish, bosses, and bonus events. Each player’s balance remains separate.
 
 ## Species Table
 

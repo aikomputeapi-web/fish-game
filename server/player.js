@@ -26,17 +26,15 @@ router.get('/redeem', ah(async (req, res) => {
 }));
 
 router.post('/redeem', ah(async (req, res) => {
-  const amount = parseInt(req.body.amount, 10);
-  if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be positive' });
+  const amount = Number(req.body.amount);
+  if (!Number.isSafeInteger(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be a positive integer' });
   if (!req.user.manager_id) return res.status(400).json({ error: 'you have no manager yet — points can be redeemed once a manager has granted you points' });
-  const existing = await db.one("SELECT id FROM redeem_requests WHERE user_id = ? AND status = 'pending'", [req.user.id]);
-  if (existing) return res.status(400).json({ error: 'you already have a pending redeem request' });
-  if (req.user.points < amount) return res.status(400).json({ error: 'insufficient balance' });
-  const rows = await db.q(
-    "INSERT INTO redeem_requests (user_id, manager_id, amount, status) VALUES (?, ?, ?, 'pending') RETURNING id",
-    [req.user.id, req.user.manager_id, amount]
-  );
-  res.json({ ok: true, id: rows[0].id });
+  const result = await db.createRedeemRequest(req.user.id, req.user.manager_id, amount);
+  if (!result.ok) {
+    if (result.reason === 'pending_exists') return res.status(400).json({ error: 'you already have a pending redeem request' });
+    return res.status(400).json({ error: 'insufficient balance or manager is unavailable' });
+  }
+  res.json({ ok: true, id: result.id });
 }));
 
 router.post('/redeem/cancel', ah(async (req, res) => {

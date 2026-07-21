@@ -247,7 +247,7 @@ gutted and rewired to socket events; all new VFX/weapon/bonus/AoE UI is added.
 
 ## Out of scope for v1 (documented follow-ups)
 
-- 4-player shared co-op tables + last-hit sniper tax (solo now, arch-ready).
+- Last-hit sniper tax and matchmaking beyond simple four-player FIFO queues.
 - Weapon "grind unlock" progression model; real art assets; real money.
 - Push notifications for managers (dashboard auto-refresh only).
 

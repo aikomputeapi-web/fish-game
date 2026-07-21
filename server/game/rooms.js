@@ -14,23 +14,31 @@ const { makePath, makeBossPath, bezier, bezierTangent, pathLength } = require('.
 const rng = require('./rng');
 
 const TICK_MS = 500;
+const MULTIPLAYER_SIZE = 4;
 
 const TOTAL_WEIGHT = FISH.reduce((s, x) => s + x.weight, 0);
 
 const rooms = new Map();   // roomKey -> Room
 const sockets = new Map(); // userId -> Set<socket>
+const multiplayerQueue = []; // unique user ids, matched in arrival order
+const queuedPlayers = new Map(); // userId -> { id, username }
+const multiplayerMatches = new Map(); // userId -> roomKey
+let nextMatchId = 1;
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
-function getRoom(key = 'default') {
+function getRoom(key, opts = {}) {
   let r = rooms.get(key);
-  if (!r) { r = createRoom(key); rooms.set(key, r); }
+  if (!r) { r = createRoom(key, opts); rooms.set(key, r); }
   return r;
 }
 
-function createRoom(key) {
+function createRoom(key, { mode = 'solo', players = [] } = {}) {
   return {
     key,
+    mode,
+    statsKey: mode,
+    players: new Map(players.map(player => [player.id, player])),
     fish: new Map(),
     nextId: 1,
     spawnTimer: 0,
@@ -103,41 +111,154 @@ function serializeFish(f) {
   };
 }
 
+function serializePlayers(room) {
+  return [...room.players.values()].map(player => ({ id: player.id, username: player.username }));
+}
+
+function currentRoom(socket) {
+  return socket.data.roomKey ? rooms.get(socket.data.roomKey) || null : null;
+}
+
+function emitRoomState(socket, room, status = 'active') {
+  socket.emit('roomState', {
+    mode: room.mode,
+    status,
+    reset: true,
+    players: serializePlayers(room),
+    required: room.mode === 'multiplayer' ? MULTIPLAYER_SIZE : 1,
+  });
+}
+
+function joinSocketRoom(socket, room) {
+  if (socket.data.roomKey && socket.data.roomKey !== room.key) socket.leave(socket.data.roomKey);
+  socket.join(room.key);
+  socket.data.roomKey = room.key;
+  socket.data.gameMode = room.mode;
+  emitRoomState(socket, room);
+  for (const f of room.fish.values()) {
+    socket.emit('spawn', serializeFish(f));
+    if (f.boss && f.def.sharedHp) {
+      socket.emit('bossHp', { fishId: f.id, hp: f.currentHp, maxHp: f.def.sharedHp, name: f.def.name });
+    }
+  }
+}
+
+function notifyQueuedPlayers() {
+  multiplayerQueue.forEach((userId, index) => {
+    const playerSockets = sockets.get(userId);
+    if (!playerSockets) return;
+    const status = {
+      mode: 'multiplayer',
+      status: 'waiting',
+      reset: true,
+      position: index + 1,
+      queued: multiplayerQueue.length,
+      required: MULTIPLAYER_SIZE,
+    };
+    for (const socket of playerSockets) socket.emit('roomState', status);
+  });
+}
+
+function startMatchesFromQueue() {
+  while (multiplayerQueue.length >= MULTIPLAYER_SIZE) {
+    const playerIds = multiplayerQueue.splice(0, MULTIPLAYER_SIZE);
+    const players = playerIds.map(id => queuedPlayers.get(id)).filter(Boolean);
+    if (players.length !== MULTIPLAYER_SIZE) continue;
+    for (const player of players) queuedPlayers.delete(player.id);
+
+    const room = getRoom(`multiplayer:${nextMatchId++}`, { mode: 'multiplayer', players });
+    for (const player of players) {
+      multiplayerMatches.set(player.id, room.key);
+      const playerSockets = sockets.get(player.id);
+      if (playerSockets) for (const socket of playerSockets) joinSocketRoom(socket, room);
+    }
+  }
+  notifyQueuedPlayers();
+}
+
+function queueForMultiplayer(socket) {
+  const userId = socket.data.userId;
+  const existingKey = multiplayerMatches.get(userId);
+  const existingRoom = existingKey && rooms.get(existingKey);
+  if (existingRoom && existingRoom.players.has(userId)) {
+    joinSocketRoom(socket, existingRoom);
+    return;
+  }
+  if (existingKey) multiplayerMatches.delete(userId);
+
+  if (!queuedPlayers.has(userId)) {
+    queuedPlayers.set(userId, { id: userId, username: socket.data.username });
+    multiplayerQueue.push(userId);
+  }
+  socket.data.gameMode = 'multiplayer';
+  socket.data.roomKey = null;
+  notifyQueuedPlayers();
+  startMatchesFromQueue();
+}
+
+function leaveMatchmaking(userId, roomKey, io) {
+  const queueIndex = multiplayerQueue.indexOf(userId);
+  if (queueIndex !== -1) {
+    multiplayerQueue.splice(queueIndex, 1);
+    queuedPlayers.delete(userId);
+    notifyQueuedPlayers();
+  }
+
+  const matchKey = multiplayerMatches.get(userId);
+  if (!matchKey || matchKey !== roomKey) return;
+  multiplayerMatches.delete(userId);
+  const room = rooms.get(matchKey);
+  if (!room) return;
+  room.players.delete(userId);
+  if (room.players.size === 0) {
+    rooms.delete(matchKey);
+    return;
+  }
+  io.to(matchKey).emit('roomState', {
+    mode: 'multiplayer',
+    status: 'active',
+    players: serializePlayers(room),
+    required: MULTIPLAYER_SIZE,
+  });
+}
+
 // ---- bonus round ----
 function startBonus(room, io) {
   room.bonusTimer = 30;
+  room.bonusPicks = new Set();
   io.to(room.key).emit('bonusStart', { duration: 30 });
   io.to(room.key).emit('miniGame', { choices: [0, 1, 2], prompt: 'Pick a chest!' });
   setTimeout(() => {
     room.bonusTimer = 0;
+    room.bonusPicks = null;
     io.to(room.key).emit('bonusEnd');
   }, 30000);
 }
 
-async function resolveMiniGame(userId, choiceIndex, io) {
+async function resolveMiniGame(userId, choiceIndex, io, room) {
   const r = Math.random();
   let prize;
   if (r < 0.70) prize = 50 + Math.floor(Math.random() * 151);
   else if (r < 0.95) prize = 300 + Math.floor(Math.random() * 401);
   else prize = 1000 + Math.floor(Math.random() * 2001);
-  await win(userId, prize);
+  await win(userId, prize, room.statsKey);
   const set = sockets.get(userId);
   if (set) for (const s of set) s.emit('miniGameResult', { choice: choiceIndex, prize, win: prize });
 }
 
 // ---- economy helpers ----
-async function bet(userId, amount) {
+async function bet(userId, amount, statsKey) {
   const r = await db.adjustPoints(userId, -amount, { type: 'bet', note: 'wager' });
   if (!r.ok) return { ok: false };
-  await db.roomStatsAdd('default', amount, 0);
+  await db.roomStatsAdd(statsKey, amount, 0);
   broadcastBalance(userId, r.balance);
   return { ok: true, balance: r.balance };
 }
 
-async function win(userId, amount) {
+async function win(userId, amount, statsKey) {
   const r = await db.adjustPoints(userId, amount, { type: 'win', note: 'payout' });
   if (r.ok) {
-    await db.roomStatsAdd('default', 0, amount);
+    await db.roomStatsAdd(statsKey, 0, amount);
     broadcastBalance(userId, r.balance);
   }
   return r;
@@ -150,7 +271,7 @@ function broadcastBalance(userId, balance) {
 
 function kickUser(userId, reason) {
   const set = sockets.get(userId);
-  if (set) { for (const s of set) s.emit('banned', { reason }); set.forEach(s => s.disconnect()); sockets.delete(userId); }
+  if (set) { for (const s of set) s.emit('banned', { reason }); for (const s of [...set]) s.disconnect(); }
 }
 
 // ---- shared boss HP kill logic ----
@@ -159,7 +280,7 @@ async function handleBossKill(fish, userId, betValue, pos, room, io, weapon) {
   let mult = fish.def.mult;
   if (fish.def.variable) mult = rng.rollVariableMult(fish.def);
   const payout = mult * betValue;
-  await win(userId, payout);
+  await win(userId, payout, room.statsKey);
   io.to(room.key).emit('kill', {
     fishId: fish.id, winnerId: userId, mult, payout, bet: betValue,
     x: pos.x, y: pos.y, isAoE: false, chain: null,
@@ -189,7 +310,7 @@ async function handleNormalKill(fish, userId, betValue, pos, room, io) {
     }
   }
   const bonusTrigger = await rng.bonusTriggerRoll(fish.def);
-  await win(userId, payout);
+  await win(userId, payout, room.statsKey);
   io.to(room.key).emit('kill', {
     fishId: fish.id, winnerId: userId, mult, payout, bet: betValue,
     x: pos.x, y: pos.y, isAoE: !!chain, chain, variable: !!fish.def.variable,
@@ -208,8 +329,8 @@ module.exports = {
       if (!hand.id) { socket.disconnect(); return; }
       const userId = hand.id;
       const role = hand.role;
-      if (role === 'manager') {
-        socket.emit('error', 'managers-cannot-play');
+      if (role !== 'player') {
+        socket.emit('error', 'players-only');
         socket.disconnect();
         return;
       }
@@ -218,19 +339,25 @@ module.exports = {
       sockets.get(userId).add(socket);
       socket.data.userId = userId;
       socket.data.role = role;
+      socket.data.username = hand.username;
 
-      const room = getRoom('default');
-      socket.join(room.key);
-      socket.data.roomKey = room.key;
-
-      for (const f of room.fish.values()) {
-        socket.emit('spawn', serializeFish(f));
+      if (hand.gameMode === 'multiplayer') {
+        queueForMultiplayer(socket);
+      } else {
+        const room = getRoom(`solo:${userId}`, {
+          mode: 'solo',
+          players: [{ id: userId, username: hand.username }],
+        });
+        room.players.set(userId, { id: userId, username: hand.username });
+        joinSocketRoom(socket, room);
       }
 
       // ---- single-target hit (STD, HEAVY weapons) ----
       socket.on('hit', async (data, ack) => {
         if (typeof ack !== 'function') ack = () => {};
         try {
+          const room = currentRoom(socket);
+          if (!room) return ack({ ok: false, reason: 'matchmaking' });
           const fid = parseInt(data && data.fishId, 10);
           const betValue = parseInt(data && data.bet, 10);
           const wl = parseInt(data && data.weaponLevel, 10) || 0;
@@ -242,7 +369,7 @@ module.exports = {
           if (!pos) return ack({ ok: false, reason: 'gone' });
           if (pos.x < -120 || pos.x > W + 120 || pos.y < -120 || pos.y > H + 120) return ack({ ok: false, reason: 'gone' });
 
-          const debit = await bet(userId, betValue);
+          const debit = await bet(userId, betValue, room.statsKey);
           if (!debit.ok) return ack({ ok: false, reason: 'broke' });
 
           const dmg = effectiveDamage(betValue, fish.def.armor || 0, weapon.armorPierce || 0);
@@ -283,6 +410,8 @@ module.exports = {
       socket.on('multiHit', async (data, ack) => {
         if (typeof ack !== 'function') ack = () => {};
         try {
+          const room = currentRoom(socket);
+          if (!room) return ack({ ok: false, reason: 'matchmaking' });
           const fishIds = (data && data.fishIds) || [];
           const betValue = parseInt(data && data.bet, 10);
           const wl = parseInt(data && data.weaponLevel, 10) || 0;
@@ -293,7 +422,7 @@ module.exports = {
           const maxTargets = weapon.type === 'spread' ? (weapon.spreadCount || 3) : (weapon.pierceTargets || 5);
           if (uniqueIds.length === 0 || uniqueIds.length > maxTargets) return ack({ ok: false, reason: 'targets' });
 
-          const debit = await bet(userId, betValue);
+          const debit = await bet(userId, betValue, room.statsKey);
           if (!debit.ok) return ack({ ok: false, reason: 'broke' });
 
           const results = [];
@@ -344,6 +473,7 @@ module.exports = {
 
       socket.on('fire', async (data, ack) => {
         if (typeof ack !== 'function') ack = () => {};
+        if (!currentRoom(socket)) return ack({ ok: false, reason: 'matchmaking' });
         const now = Date.now();
         const last = socket.data.lastFire || 0;
         const wl = (data && Number.isFinite(data.weaponLevel)) ? Math.max(0, Math.min(WEAPON_LEVELS.length - 1, data.weaponLevel)) : 0;
@@ -360,12 +490,30 @@ module.exports = {
       });
 
       socket.on('miniGamePick', (choice) => {
-        resolveMiniGame(userId, choice, io);
+        const room = currentRoom(socket);
+        const pick = parseInt(choice, 10);
+        if (!room || room.bonusTimer <= 0 || !Number.isInteger(pick) || pick < 0 || pick > 2) return;
+        if (room.bonusPicks && room.bonusPicks.has(userId)) return;
+        if (room.bonusPicks) room.bonusPicks.add(userId);
+        resolveMiniGame(userId, pick, io, room);
       });
 
       socket.on('disconnect', () => {
         const set = sockets.get(userId);
-        if (set) { set.delete(socket); if (set.size === 0) sockets.delete(userId); }
+        if (!set) return;
+        set.delete(socket);
+        if (set.size > 0) return;
+        sockets.delete(userId);
+        const roomKey = socket.data.roomKey;
+        if (socket.data.gameMode === 'multiplayer') {
+          leaveMatchmaking(userId, roomKey, io);
+          return;
+        }
+        const room = roomKey && rooms.get(roomKey);
+        if (room && room.mode === 'solo') {
+          room.players.delete(userId);
+          if (room.players.size === 0) rooms.delete(room.key);
+        }
       });
     });
   },
@@ -440,7 +588,7 @@ async function roomController(room) {
   if (room.stateTimer > 0) return;
   room.stateTimer = 2;
   try {
-    const stats = await db.roomStatsGet(room.key);
+    const stats = await db.roomStatsGet(room.statsKey);
     const s = await rng.loadSettings();
     room.allowance = rng.computeAllowance(stats, s.rtp, room.allowance);
   } catch (e) { /* ignore */ }

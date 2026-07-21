@@ -139,6 +139,9 @@ td.actions { display: flex; gap: 4px; flex-wrap: wrap; }
 #hud { position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
 #topbar { display: flex; justify-content: space-between; align-items: flex-start; padding: 10px 14px; }
 .top-right { display: flex; gap: 8px; align-items: center; }
+.game-mode-switch { pointer-events: auto; display: flex; gap: 4px; }
+.game-mode-switch .mode-btn { padding: 7px 10px; font-size: 11px; }
+.match-status { max-width: 190px; color: #9ee3ff; font-size: 11px; font-weight: 800; letter-spacing: .7px; text-align: center; text-shadow: 0 1px 2px #000; }
 .icon-btn { pointer-events: auto; width: 42px; height: 42px; border-radius: 50%; border: 2px solid #2e7ea8; background: rgba(4, 30, 50, .8); color: #cfeeff; font-size: 18px; cursor: pointer; }
 .icon-btn:hover { background: rgba(20, 70, 110, .9); }
 
