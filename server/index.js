@@ -17,7 +17,10 @@ const { COOKIE, SECRET, router: authRouter } = require('./auth');
 const adminRouter = require('./admin');
 const managerRouter = require('./manager');
 const playerRouter = require('./player');
+const tournamentRouter = require('./tournaments');
 const rooms = require('./game/rooms');
+const tournaments = require('./game/tournaments');
+const { ROOM_TIERS } = require('./game/constants');
 
 const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
@@ -70,14 +73,14 @@ app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/manager', managerRouter);
 app.use('/api/player', playerRouter);
+app.use('/api/tournaments', tournamentRouter);
 app.get('/api/health', (req, res) => res.json({ ok: true, engine: db.ENGINE }));
 
 // socket auth from cookie JWT
 io.use((socket, next) => {
   try {
-    const gameMode = socket.handshake.auth && socket.handshake.auth.gameMode === 'multiplayer'
-      ? 'multiplayer'
-      : 'solo';
+    const reqAuth = socket.handshake.auth || {};
+    const gameMode = reqAuth.gameMode === 'multiplayer' ? 'multiplayer' : 'solo';
     const raw = socket.handshake.headers.cookie;
     if (!raw) return next(new Error('no auth'));
     const cookies = Object.fromEntries(raw.split(';').map(s => s.trim().split('=')));
@@ -85,11 +88,21 @@ io.use((socket, next) => {
     if (!t) return next(new Error('no auth'));
     let payload;
     try { payload = jwt.verify(t, SECRET); } catch { return next(new Error('bad token')); }
-    db.getUser(payload.id).then(u => {
+    db.getUser(payload.id).then(async (u) => {
       if (!u) return next(new Error('no user'));
       if (u.banned) return next(new Error('banned'));
       if (u.email && !u.email_verified) return next(new Error('email not verified'));
-      socket.handshake.auth = { id: u.id, username: u.username, role: u.role, banned: false, gameMode };
+      // Resolve the stake tier the client asked for; VIP is gated by points.
+      const requested = Object.prototype.hasOwnProperty.call(ROOM_TIERS, reqAuth.tier) ? reqAuth.tier : 'mid';
+      const s = await db.getSettings(['vip_min_points']);
+      const vipMin = parseInt(s.vip_min_points || '20000', 10);
+      let tier = requested;
+      let vipDenied = false;
+      if (ROOM_TIERS[tier].vip && Number(u.points) < vipMin) { tier = 'high'; vipDenied = true; }
+      socket.handshake.auth = {
+        id: u.id, username: u.username, role: u.role, banned: false,
+        gameMode, level: Number(u.level) || 1, tier, vipDenied,
+      };
       next();
     }).catch(() => next(new Error('db error')));
   } catch (e) { next(new Error('auth failed')); }
@@ -104,6 +117,7 @@ app.use('/media', express.static(path.join(__dirname, '..', 'MEDIA')));
 
 // route entrypoints (auth handled client-side via role-based redirect)
 app.get('/game', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'game.html')));
+app.get(['/lobby', '/launcher'], (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'launcher.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'admin.html')));
 app.get('/manager', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'manager.html')));
 app.get('/auth', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'auth.html')));
@@ -127,6 +141,7 @@ app.use((err, req, res, next) => {
     return;
   }
   rooms.startTick(io);
+  tournaments.startScheduler();
   server.listen(PORT, () => console.log(`Fire Kirin server listening on port ${PORT} (engine: ${db.ENGINE})`));
 })();
 

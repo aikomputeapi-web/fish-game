@@ -59,11 +59,25 @@ async function killRoll(def, betValue, roomState) {
   const f = bulletFeel(s.bullet_factor);   // constant — keeps EV flat in betValue
   const A = roomState.allowance || 1.0;
   const base = (target / M) * A * f;
-  const p = clamp(base, 0.0005, 0.95);
+  const pNormal = clamp(base, 0.0005, 0.95);
+
+  // FURY MODE — feeding-frenzy overdrive. When furyMult > 1 we raise the catch
+  // rate by that factor and shrink each payout by the SAME realised factor
+  // (payoutFactor). Expected value per shot = p × payoutFactor × M × bet =
+  // pNormal × M × bet — IDENTICAL to normal play, and clamp-safe. Fury changes
+  // the feel (rapid catches, smaller each), never the RTP. So realised RTP is
+  // unaffected no matter how often fury is used.
+  const furyMult = roomState.furyMult || 1;
+  let p = pNormal, payoutFactor = 1;
+  if (furyMult > 1) {
+    p = clamp(base * furyMult, 0.0005, 0.95);
+    payoutFactor = p > 0 ? pNormal / p : 1;
+  }
+
   const roll = Math.random();
   const killed = roll < p;
   const near = !killed && roll < p * 1.5; // near-miss flag for client teases
-  return { killed, near, p };
+  return { killed, near, p, payoutFactor };
 }
 
 // roll the actual multiplier for a variable boss (uniform in range)

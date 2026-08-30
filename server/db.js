@@ -85,7 +85,22 @@ function buildMigrations() {
        manager_id INTEGER,
        banned BOOLEAN NOT NULL DEFAULT false,
        created_at ${TS} NOT NULL DEFAULT ${NOW},
-       last_login ${TS}
+       last_login ${TS},
+       level INTEGER NOT NULL DEFAULT 1,
+       xp BIGINT NOT NULL DEFAULT 0,
+       referral_code TEXT,
+       referred_by INTEGER,
+       last_daily_claim TEXT,
+       daily_streak INTEGER NOT NULL DEFAULT 0,
+       total_kills INTEGER NOT NULL DEFAULT 0,
+       boss_kills INTEGER NOT NULL DEFAULT 0,
+       big_wins INTEGER NOT NULL DEFAULT 0,
+       jackpot_wins INTEGER NOT NULL DEFAULT 0,
+       total_wagered BIGINT NOT NULL DEFAULT 0,
+       total_won BIGINT NOT NULL DEFAULT 0,
+       win_streak INTEGER NOT NULL DEFAULT 0,
+       best_win_streak INTEGER NOT NULL DEFAULT 0,
+       powerups TEXT NOT NULL DEFAULT '{}'
      )`,
     `CREATE TABLE IF NOT EXISTS settings (
        key TEXT PRIMARY KEY,
@@ -119,6 +134,81 @@ function buildMigrations() {
        total_paid BIGINT NOT NULL DEFAULT 0,
        updated_at ${TS} NOT NULL DEFAULT ${NOW}
      )`,
+    `CREATE TABLE IF NOT EXISTS achievements (
+       id ${PK},
+       key TEXT NOT NULL UNIQUE,
+       name TEXT NOT NULL,
+       description TEXT NOT NULL,
+       category TEXT NOT NULL,
+       target INTEGER NOT NULL DEFAULT 0,
+       reward BIGINT NOT NULL DEFAULT 0
+     )`,
+    `CREATE TABLE IF NOT EXISTS user_achievements (
+       user_id INTEGER NOT NULL REFERENCES users(id),
+       achievement_id INTEGER NOT NULL REFERENCES achievements(id),
+       unlocked_at ${TS} NOT NULL DEFAULT ${NOW},
+       PRIMARY KEY (user_id, achievement_id)
+     )`,
+    `CREATE TABLE IF NOT EXISTS referrals (
+       id ${PK},
+       referrer_id INTEGER NOT NULL REFERENCES users(id),
+       referred_id INTEGER NOT NULL REFERENCES users(id),
+       bonus BIGINT NOT NULL DEFAULT 0,
+       created_at ${TS} NOT NULL DEFAULT ${NOW}
+     )`,
+    `CREATE TABLE IF NOT EXISTS promo_codes (
+       id ${PK},
+       code TEXT NOT NULL UNIQUE,
+       points BIGINT NOT NULL DEFAULT 0,
+       uses_total INTEGER NOT NULL DEFAULT 1,
+       uses_used INTEGER NOT NULL DEFAULT 0,
+       expires_at TEXT,
+       created_at ${TS} NOT NULL DEFAULT ${NOW}
+     )`,
+    `CREATE TABLE IF NOT EXISTS promo_redemptions (
+       id ${PK},
+       code_id INTEGER NOT NULL REFERENCES promo_codes(id),
+       user_id INTEGER NOT NULL REFERENCES users(id),
+       created_at ${TS} NOT NULL DEFAULT ${NOW}
+     )`,
+    `CREATE TABLE IF NOT EXISTS chat_messages (
+       id ${PK},
+       user_id INTEGER NOT NULL REFERENCES users(id),
+       room TEXT NOT NULL,
+       message TEXT NOT NULL,
+       created_at ${TS} NOT NULL DEFAULT ${NOW}
+     )`,
+    `CREATE TABLE IF NOT EXISTS tournaments (
+       id ${PK},
+       name TEXT NOT NULL,
+       status TEXT NOT NULL DEFAULT 'signup',
+       entry_fee BIGINT NOT NULL DEFAULT 0,
+       prize_pool BIGINT NOT NULL DEFAULT 0,
+       starts_at TEXT NOT NULL,
+       ends_at TEXT NOT NULL,
+       winner_pcts TEXT NOT NULL DEFAULT '[50,30,20]',
+       created_at ${TS} NOT NULL DEFAULT ${NOW}
+     )`,
+    `CREATE TABLE IF NOT EXISTS tournament_entries (
+       id ${PK},
+       tournament_id INTEGER NOT NULL REFERENCES tournaments(id),
+       user_id INTEGER NOT NULL REFERENCES users(id),
+       score BIGINT NOT NULL DEFAULT 0,
+       wagered BIGINT NOT NULL DEFAULT 0,
+       won BIGINT NOT NULL DEFAULT 0,
+       rank INTEGER,
+       prize BIGINT NOT NULL DEFAULT 0,
+       paid BOOLEAN NOT NULL DEFAULT false,
+       joined_at ${TS} NOT NULL DEFAULT ${NOW}
+     )`,
+    `CREATE TABLE IF NOT EXISTS jackpot (
+       id INTEGER PRIMARY KEY,
+       pool BIGINT NOT NULL DEFAULT 0,
+       hits INTEGER NOT NULL DEFAULT 0,
+       last_winner_id INTEGER,
+       last_win BIGINT NOT NULL DEFAULT 0,
+       last_won_at ${TS}
+     )`,
   ];
 }
 const MIGRATIONS = buildMigrations();
@@ -131,6 +221,21 @@ const SAFEMIGRATIONS = [
   "ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT false",
   "ALTER TABLE users ADD COLUMN verify_token TEXT",
   `ALTER TABLE users ADD COLUMN verify_expires ${TS}`,
+  "ALTER TABLE users ADD COLUMN level INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE users ADD COLUMN xp BIGINT NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN referral_code TEXT",
+  "ALTER TABLE users ADD COLUMN referred_by INTEGER",
+  "ALTER TABLE users ADD COLUMN last_daily_claim TEXT",
+  "ALTER TABLE users ADD COLUMN daily_streak INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN total_kills INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN boss_kills INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN big_wins INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN jackpot_wins INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN total_wagered BIGINT NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN total_won BIGINT NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN win_streak INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN best_win_streak INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN powerups TEXT NOT NULL DEFAULT '{}'",
 ];
 
 async function migrate() {
@@ -169,6 +274,17 @@ async function migrate() {
   try { await exec("CREATE INDEX IF NOT EXISTS transactions_user_created_idx ON transactions (user_id, created_at DESC)"); } catch (e) { console.warn('[transactions index skip]', e.message); }
   try { await exec("CREATE INDEX IF NOT EXISTS redeem_requests_manager_status_idx ON redeem_requests (manager_id, status, created_at DESC)"); } catch (e) { console.warn('[redeem requests index skip]', e.message); }
   try { await exec("CREATE UNIQUE INDEX IF NOT EXISTS room_stats_room_unique ON room_stats (room)"); } catch (e) { console.warn('[room stats index skip]', e.message); }
+  try { await exec("CREATE UNIQUE INDEX IF NOT EXISTS referrals_referred_unique ON referrals (referred_id)"); } catch (e) { console.warn('[referrals index skip]', e.message); }
+  try { await exec("CREATE UNIQUE INDEX IF NOT EXISTS tournament_entries_unique ON tournament_entries (tournament_id, user_id)"); } catch (e) { console.warn('[tournament entries index skip]', e.message); }
+  try { await exec("CREATE UNIQUE INDEX IF NOT EXISTS promo_redemptions_unique ON promo_redemptions (code_id, user_id)"); } catch (e) { console.warn('[promo redemptions index skip]', e.message); }
+  // Backfill a referral code for accounts created before referrals existed.
+  try {
+    const noCodes = await q("SELECT id, username FROM users WHERE referral_code IS NULL OR referral_code = ''");
+    for (const u of noCodes) {
+      await exec("UPDATE users SET referral_code = ? WHERE id = ?", [makeReferralCode(u.username), u.id]);
+    }
+  } catch (e) { console.warn('[referral code backfill skip]', e.message); }
+  try { await exec("INSERT INTO jackpot (id, pool, hits) VALUES (1, 0, 0) ON CONFLICT (id) DO NOTHING"); } catch (e) { console.warn('[jackpot seed skip]', e.message); }
   await seedOwner();
   await seedDefaults();
 }
@@ -203,10 +319,36 @@ async function seedDefaults() {
     rtp: '0.96',
     bullet_factor: '1.0',
     bonus_rate: '0.004',
+    jackpot_rate: '0.02',
+    jackpot_chance: '0.0008',
+    jackpot_seed: '2000',
+    daily_base: '100',
+    daily_step: '100',
+    daily_cap_streak: '10',
+    referral_bonus: '500',
+    vip_min_points: '20000',
+    ai_bots: 'on',
+    event_name: '',
+    event_active: '0',
+    pw_missile: '400',
+    pw_freeze: '250',
+    pw_chain: '350',
+    pw_laser: '600',
   };
   for (const [k, v] of Object.entries(defaults)) {
     try { await exec("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING", [k, v]); } catch (e) { }
   }
+}
+
+// Deterministic-ish unique referral code derived from a username.
+function makeReferralCode(username) {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const slug = String(username || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4) || 'FK';
+  let suffix = '';
+  const rnd = (Math.random() + 1).toString(36).slice(2, 6).toUpperCase();
+  for (const ch of rnd) { if (alphabet.includes(ch)) suffix += ch; }
+  while (suffix.length < 4) suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return slug + '-' + suffix.slice(0, 4);
 }
 
 // ============================================================ user helpers
@@ -231,15 +373,17 @@ async function markEmailVerified(id) {
 async function listUsers() {
   return q(
     "SELECT u.id, u.username, u.points, u.role, u.banned, u.created_at, u.last_login, " +
+    "u.level, u.referral_code, u.total_kills, u.boss_kills, " +
     "m.username AS manager_name " +
     "FROM users u LEFT JOIN users m ON u.manager_id = m.id ORDER BY u.created_at DESC"
   );
 }
 async function createUser(username, passwordHash, { email = null, verifyToken = null, verifyExpires = null } = {}) {
   const bonus = parseInt(process.env.SIGNUP_BONUS || '2000', 10);
+  const code = makeReferralCode(username);
   return q(
-    "INSERT INTO users (username, password_hash, email, verify_token, verify_expires, points, role) VALUES (?, ?, ?, ?, ?, ?, 'player') RETURNING id",
-    [username, passwordHash, email, verifyToken, verifyExpires, bonus]
+    "INSERT INTO users (username, password_hash, email, verify_token, verify_expires, points, role, referral_code) VALUES (?, ?, ?, ?, ?, ?, 'player', ?) RETURNING id",
+    [username, passwordHash, email, verifyToken, verifyExpires, bonus, code]
   ).then(async (rows) => {
     const id = rows[0].id;
     await q("INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'signup_bonus', ?, ?, 'signup')", [id, bonus, bonus]);
@@ -589,6 +733,339 @@ async function roomStatsAdd(room, wager, payout) {
   return { wagered: Number(rows[0].total_wagered), paid: Number(rows[0].total_paid) };
 }
 
+// ============================================================ player profile / counters
+// Increment numeric counters on a user row. delta keys map to columns:
+//   kills, bossKills, bigWins, jackpotWins, wagered, won, xp, winStreak.
+// Returns the updated row or null.
+const COUNTER_COLUMNS = {
+  kills: 'total_kills', kill: 'total_kills', bossKills: 'boss_kills', boss: 'boss_kills',
+  bigWins: 'big_wins', big: 'big_wins',
+  jackpotWins: 'jackpot_wins', jackpot: 'jackpot_wins', wagered: 'total_wagered', won: 'total_won',
+  xp: 'xp', winStreak: 'win_streak',
+};
+async function incrCounters(userId, delta = {}) {
+  const sets = [], params = [];
+  for (const key of Object.keys(delta)) {
+    const col = COUNTER_COLUMNS[key];
+    const val = Math.round(Number(delta[key]) || 0);
+    if (col && val !== 0) { sets.push(`${col} = ${col} + ?`); params.push(val); }
+  }
+  if (sets.length === 0) return null;
+  const rows = await q(
+    `UPDATE users SET ${sets.join(', ')} WHERE id = ? RETURNING level, xp, total_kills, boss_kills, big_wins, jackpot_wins, total_wagered, total_won, win_streak, best_win_streak`,
+    [...params, userId]
+  );
+  return rows[0] || null;
+}
+// Best-streak is tracked separately so a losing streak doesn't decay it.
+async function bumpBestStreak(userId, streak) {
+  await exec("UPDATE users SET best_win_streak = MAX(best_win_streak, ?) WHERE id = ?", [streak, userId]);
+}
+
+// ============================================================ daily login bonus
+async function claimDailyBonus(userId) {
+  return withTransaction(async (tx) => {
+    const u = await tx.query("SELECT points, daily_streak, last_daily_claim FROM users WHERE id = ?", [userId]);
+    if (u.length === 0) return { ok: false, reason: 'no_user' };
+    const user = u[0];
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+    if (user.last_daily_claim === today) return { ok: false, reason: 'already_claimed', streak: Number(user.daily_streak) || 0 };
+    const streak = user.last_daily_claim === yesterday ? (Number(user.daily_streak) || 0) + 1 : 1;
+    const s = await getSettings(['daily_base', 'daily_step', 'daily_cap_streak']);
+    const base = parseInt(s.daily_base || '100', 10);
+    const step = parseInt(s.daily_step || '100', 10);
+    const cap = parseInt(s.daily_cap_streak || '10', 10);
+    const bonus = base + (Math.min(streak, cap) - 1) * step;
+    await tx.query("UPDATE users SET daily_streak = ?, last_daily_claim = ? WHERE id = ?", [streak, today, userId]);
+    const rows = await tx.query("UPDATE users SET points = points + ? WHERE id = ? RETURNING points", [bonus, userId]);
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'daily', ?, ?, ?)",
+      [userId, bonus, rows[0].points, `daily streak day ${streak}`]
+    );
+    return { ok: true, bonus, streak, points: rows[0].points };
+  });
+}
+
+// ============================================================ referrals
+async function applyReferral(newUserId, code) {
+  const codeStr = String(code || '').trim().toUpperCase();
+  if (!codeStr) return { ok: false, reason: 'no_code' };
+  const referrer = await one("SELECT id FROM users WHERE UPPER(referral_code) = ?", [codeStr]);
+  if (!referrer) return { ok: false, reason: 'invalid' };
+  if (referrer.id === newUserId) return { ok: false, reason: 'self' };
+  return withTransaction(async (tx) => {
+    const set = await tx.query(
+      "UPDATE users SET referred_by = ? WHERE id = ? AND referred_by IS NULL RETURNING id",
+      [referrer.id, newUserId]
+    );
+    if (set.length === 0) return rollback({ ok: false, reason: 'already_referred' });
+    const s = await getSettings(['referral_bonus']);
+    const bonus = parseInt(s.referral_bonus || '500', 10);
+    await tx.query("INSERT INTO referrals (referrer_id, referred_id, bonus) VALUES (?, ?, ?)", [referrer.id, newUserId, bonus]);
+    const rr = await tx.query("UPDATE users SET points = points + ? WHERE id = ? RETURNING points", [bonus, referrer.id]);
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'referral', ?, ?, ?)",
+      [referrer.id, bonus, rr[0].points, 'referral reward']
+    );
+    const cr = await tx.query("UPDATE users SET points = points + ? WHERE id = ? RETURNING points", [bonus, newUserId]);
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'referral', ?, ?, ?)",
+      [newUserId, bonus, cr[0].points, 'welcome referral bonus']
+    );
+    return { ok: true, bonus };
+  });
+}
+async function getReferralInfo(userId) {
+  const u = await one("SELECT referral_code, referred_by FROM users WHERE id = ?", [userId]);
+  const refs = await q("SELECT COUNT(*) AS c, COALESCE(SUM(bonus),0) AS s FROM referrals WHERE referrer_id = ?", [userId]);
+  return {
+    code: u ? u.referral_code : null,
+    referred: !!u.referred_by,
+    referredCount: Number(refs[0].c),
+    totalBonus: Number(refs[0].s),
+  };
+}
+
+// ============================================================ promo codes
+async function createPromoCode({ code, points, uses, expiresAt }) {
+  const c = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{3,24}$/.test(c)) throw new Error('code must be 3-24 uppercase letters/numbers');
+  if (!Number.isSafeInteger(points) || points <= 0) throw new Error('points must be a positive integer');
+  if (!Number.isSafeInteger(uses) || uses < 1) throw new Error('uses must be a positive integer');
+  const existing = await one("SELECT id FROM promo_codes WHERE code = ?", [c]);
+  if (existing) throw new Error('code already exists');
+  await exec("INSERT INTO promo_codes (code, points, uses_total, expires_at) VALUES (?, ?, ?, ?)", [c, points, uses, expiresAt || null]);
+  return c;
+}
+async function listPromoCodes() {
+  return q("SELECT * FROM promo_codes ORDER BY created_at DESC LIMIT 100");
+}
+async function redeemPromo(userId, code) {
+  const c = String(code || '').trim().toUpperCase();
+  return withTransaction(async (tx) => {
+    const rows = await tx.query("SELECT * FROM promo_codes WHERE code = ? AND uses_used < uses_total LIMIT 1", [c]);
+    if (rows.length === 0) return rollback({ ok: false, reason: 'invalid' });
+    const promo = rows[0];
+    if (promo.expires_at && new Date(promo.expires_at).getTime() < Date.now()) return rollback({ ok: false, reason: 'expired' });
+    const already = await tx.query("SELECT 1 FROM promo_redemptions WHERE code_id = ? AND user_id = ?", [promo.id, userId]);
+    if (already.length > 0) return rollback({ ok: false, reason: 'already_redeemed' });
+    await tx.query("UPDATE promo_codes SET uses_used = uses_used + 1 WHERE id = ?", [promo.id]);
+    await tx.query("INSERT INTO promo_redemptions (code_id, user_id) VALUES (?, ?)", [promo.id, userId]);
+    const u = await tx.query("UPDATE users SET points = points + ? WHERE id = ? RETURNING points", [promo.points, userId]);
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'promo', ?, ?, ?)",
+      [userId, promo.points, u[0].points, `code ${c}`]
+    );
+    return { ok: true, points: Number(promo.points), balance: Number(u[0].points), code: c };
+  });
+}
+
+// ============================================================ power-ups
+async function getPowerups(userId) {
+  const u = await one("SELECT powerups FROM users WHERE id = ?", [userId]);
+  try { return JSON.parse(u ? u.powerups : '{}') || {}; } catch (_) { return {}; }
+}
+async function buyPowerup(userId, key, price) {
+  return withTransaction(async (tx) => {
+    const debit = await tx.query(
+      "UPDATE users SET points = points - ? WHERE id = ? AND points - ? >= 0 RETURNING points",
+      [price, userId, price]
+    );
+    if (debit.length === 0) return rollback({ ok: false, reason: 'insufficient' });
+    const u = await tx.query("SELECT powerups FROM users WHERE id = ?", [userId]);
+    let map = {};
+    try { map = JSON.parse(u[0].powerups || '{}'); } catch (_) {}
+    map[key] = (map[key] || 0) + 1;
+    await tx.query("UPDATE users SET powerups = ? WHERE id = ?", [JSON.stringify(map), userId]);
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'powerup', ?, ?, ?)",
+      [userId, -price, debit[0].points, `buy ${key}`]
+    );
+    return { ok: true, points: Number(debit[0].points), powerups: map };
+  });
+}
+async function consumePowerup(userId, key) {
+  return withTransaction(async (tx) => {
+    const u = await tx.query("SELECT powerups FROM users WHERE id = ?", [userId]);
+    let map = {};
+    try { map = JSON.parse(u[0].powerups || '{}'); } catch (_) {}
+    if (!map[key] || map[key] < 1) return rollback({ ok: false, reason: 'none' });
+    map[key] -= 1;
+    await tx.query("UPDATE users SET powerups = ? WHERE id = ?", [JSON.stringify(map), userId]);
+    return { ok: true, powerups: map };
+  });
+}
+
+// ============================================================ tournaments
+// Timestamps are stored in an engine-consistent, string-comparable format so
+// the `created_at >= ?` comparisons in leaderboard queries work on both engines.
+function tsForDb(d) {
+  const iso = new Date(d).toISOString();
+  return ENGINE === 'sqlite' ? iso.replace('T', ' ').replace('Z', '') : iso;
+}
+async function createTournament({ name, entryFee, startsAt, endsAt, winnerPcts }) {
+  const rows = await q(
+    "INSERT INTO tournaments (name, entry_fee, starts_at, ends_at, winner_pcts) VALUES (?, ?, ?, ?, ?) RETURNING id",
+    [name, entryFee, tsForDb(startsAt), tsForDb(endsAt), JSON.stringify(winnerPcts)]
+  );
+  return rows[0].id;
+}
+async function listTournaments(includeAll = false) {
+  const where = includeAll ? '' : "WHERE status != 'closed'";
+  return q(`SELECT * FROM tournaments ${where} ORDER BY created_at DESC LIMIT 50`);
+}
+async function joinTournament(tournamentId, userId) {
+  return withTransaction(async (tx) => {
+    const t = await tx.query("SELECT * FROM tournaments WHERE id = ?", [tournamentId]);
+    if (t.length === 0) return rollback({ ok: false, reason: 'no_tournament' });
+    const tour = t[0];
+    const now = Date.now();
+    if (tour.status !== 'signup' || new Date(tsForDb(tour.starts_at)).getTime() <= now) {
+      return rollback({ ok: false, reason: 'not_signup' });
+    }
+    const already = await tx.query("SELECT 1 FROM tournament_entries WHERE tournament_id = ? AND user_id = ?", [tournamentId, userId]);
+    if (already.length > 0) return rollback({ ok: false, reason: 'already_joined' });
+    const fee = Number(tour.entry_fee);
+    const debit = await tx.query(
+      "UPDATE users SET points = points - ? WHERE id = ? AND points - ? >= 0 RETURNING points",
+      [fee, userId, fee]
+    );
+    if (debit.length === 0) return rollback({ ok: false, reason: 'insufficient' });
+    await tx.query("INSERT INTO tournament_entries (tournament_id, user_id) VALUES (?, ?)", [tournamentId, userId]);
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'tournament_join', ?, ?, ?)",
+      [userId, -fee, debit[0].points, `join ${tour.name}`]
+    );
+    return { ok: true, fee, balance: Number(debit[0].points) };
+  });
+}
+// Live standings during a tournament: net score = winnings - wagering, from the
+// ledger between the tournament's start and end timestamps.
+async function tournamentLeaderboard(tournamentId, limit = 25) {
+  const t = await one("SELECT * FROM tournaments WHERE id = ?", [tournamentId]);
+  if (!t) return null;
+  const rows = await q(
+    "SELECT e.user_id, u.username, " +
+    "COALESCE(SUM(CASE WHEN tr.type='bet' THEN tr.amount ELSE 0 END),0) AS wagered, " +
+    "COALESCE(SUM(CASE WHEN tr.type='win' THEN tr.amount ELSE 0 END),0) AS won, " +
+    "e.score, e.rank, e.prize " +
+    "FROM tournament_entries e JOIN users u ON u.id = e.user_id " +
+    "LEFT JOIN transactions tr ON tr.user_id = e.user_id AND tr.created_at >= ? AND tr.created_at <= ? " +
+    "WHERE e.tournament_id = ? GROUP BY e.user_id, u.username, e.score, e.rank, e.prize " +
+    "ORDER BY (COALESCE(SUM(CASE WHEN tr.type='win' THEN tr.amount ELSE 0 END),0) + COALESCE(SUM(CASE WHEN tr.type='bet' THEN tr.amount ELSE 0 END),0)) DESC LIMIT ?",
+    [t.starts_at, t.ends_at, tournamentId, limit]
+  );
+  return rows.map(r => ({
+    userId: r.user_id, username: r.username,
+    score: Number(r.won) + Number(r.wagered), wagered: Math.abs(Number(r.wagered)), won: Math.max(0, Number(r.won)),
+    rank: r.rank, prize: Number(r.prize),
+  }));
+}
+async function closeTournament(tournamentId) {
+  return withTransaction(async (tx) => {
+    const t = await tx.query("SELECT * FROM tournaments WHERE id = ? AND status != 'closed'", [tournamentId]);
+    if (t.length === 0) return rollback({ ok: false, reason: 'no_tournament' });
+    const tour = t[0];
+    const standings = await tx.query(
+      "SELECT e.user_id, u.username, " +
+      "COALESCE(SUM(CASE WHEN tr.type='bet' THEN tr.amount ELSE 0 END),0) AS wagered, " +
+      "COALESCE(SUM(CASE WHEN tr.type='win' THEN tr.amount ELSE 0 END),0) AS won " +
+      "FROM tournament_entries e JOIN users u ON u.id = e.user_id " +
+      "LEFT JOIN transactions tr ON tr.user_id = e.user_id AND tr.created_at >= ? AND tr.created_at <= ? " +
+      "WHERE e.tournament_id = ? GROUP BY e.user_id, u.username " +
+      "ORDER BY (COALESCE(SUM(CASE WHEN tr.type='win' THEN tr.amount ELSE 0 END),0) + COALESCE(SUM(CASE WHEN tr.type='bet' THEN tr.amount ELSE 0 END),0)) DESC",
+      [tour.starts_at, tour.ends_at, tournamentId]
+    );
+    let pcts = [50, 30, 20];
+    try { pcts = JSON.parse(tour.winner_pcts); } catch (_) {}
+    const entries = await tx.query("SELECT COUNT(*) AS c FROM tournament_entries WHERE tournament_id = ?", [tournamentId]);
+    const pool = Number(tour.entry_fee) * Number(entries[0].c);
+    await tx.query("UPDATE tournaments SET status = 'closed', prize_pool = ? WHERE id = ?", [pool, tournamentId]);
+    const winners = [];
+    standings.slice(0, pcts.length).forEach((s, i) => {
+      const prize = Math.round((pool * pcts[i]) / 100);
+      if (prize > 0) winners.push({ userId: s.user_id, rank: i + 1, prize, score: Number(s.won) + Number(s.wagered) });
+    });
+    for (const w of winners) {
+      await tx.query(
+        "UPDATE tournament_entries SET rank = ?, prize = ?, paid = true, score = ? WHERE tournament_id = ? AND user_id = ?",
+        [w.rank, w.prize, w.score, tournamentId, w.userId]
+      );
+      const u = await tx.query("UPDATE users SET points = points + ? WHERE id = ? RETURNING points", [w.prize, w.userId]);
+      await tx.query(
+        "INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'tournament_prize', ?, ?, ?)",
+        [w.userId, w.prize, u[0].points, `tournament prize #${w.rank}`]
+      );
+    }
+    return { ok: true, pool, winners: winners.length };
+  });
+}
+
+// ============================================================ achievements
+async function seedAchievements(defs) {
+  for (const a of defs) {
+    try {
+      await exec(
+        "INSERT INTO achievements (key, name, description, category, target, reward) VALUES (?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, category = EXCLUDED.category, target = EXCLUDED.target, reward = EXCLUDED.reward",
+        [a.key, a.name, a.desc, a.category, a.target, a.reward]
+      );
+    } catch (e) { }
+  }
+}
+async function unlockAchievement(userId, achievement) {
+  return withTransaction(async (tx) => {
+    const ins = await tx.query(
+      "INSERT INTO user_achievements (user_id, achievement_id) VALUES (?, ?) ON CONFLICT DO NOTHING RETURNING achievement_id",
+      [userId, achievement.id]
+    );
+    if (ins.length === 0) return null;
+    const u = await tx.query("UPDATE users SET points = points + ? WHERE id = ? RETURNING points", [achievement.reward, userId]);
+    await tx.query(
+      "INSERT INTO transactions (user_id, type, amount, balance_after, note) VALUES (?, 'achievement', ?, ?, ?)",
+      [userId, achievement.reward, u[0].points, achievement.name]
+    );
+    return { name: achievement.name, reward: achievement.reward, points: Number(u[0].points) };
+  });
+}
+async function getUserAchievements(userId) {
+  return q(
+    "SELECT a.key, a.name, a.description, a.category, a.reward, ua.unlocked_at " +
+    "FROM achievements a JOIN user_achievements ua ON a.id = ua.achievement_id " +
+    "WHERE ua.user_id = ? ORDER BY ua.unlocked_at DESC",
+    [userId]
+  );
+}
+async function allAchievementDefs() {
+  return q("SELECT * FROM achievements ORDER BY category, id");
+}
+
+// ============================================================ jackpot
+async function jackpotGet() {
+  const row = await one("SELECT * FROM jackpot WHERE id = 1");
+  if (!row) return { pool: 0, hits: 0, lastWinner: null, lastWin: 0, lastWonAt: null };
+  return {
+    pool: Number(row.pool), hits: Number(row.hits),
+    lastWinner: row.last_winner_id, lastWin: Number(row.last_win || 0), lastWonAt: row.last_won_at,
+  };
+}
+async function jackpotSetPool(pool, { hits, lastWinnerId, lastWin } = {}) {
+  await exec(
+    "INSERT INTO jackpot (id, pool, hits, last_winner_id, last_win, last_won_at) VALUES (1, ?, ?, ?, ?, CURRENT_TIMESTAMP) " +
+    "ON CONFLICT (id) DO UPDATE SET pool = EXCLUDED.pool, hits = EXCLUDED.hits, " +
+    "last_winner_id = EXCLUDED.last_winner_id, last_win = EXCLUDED.last_win, last_won_at = EXCLUDED.last_won_at",
+    [pool, hits || 0, lastWinnerId || null, lastWin || 0]
+  );
+}
+
+// ============================================================ chat
+async function insertChat(userId, room, message) {
+  const rows = await q("INSERT INTO chat_messages (user_id, room, message) VALUES (?, ?, ?) RETURNING id", [userId, room, message]);
+  return Number(rows[0].id);
+}
+
 async function close() {
   if (ENGINE === 'pg') await pgPool.end();
   else if (sqliteDb) sqliteDb.close();
@@ -604,5 +1081,15 @@ module.exports = {
   getSettings, getAllSettings, setSetting,
   userWageredWon, globalStats,
   roomStatsGet, roomStatsAdd,
+  makeReferralCode,
+  incrCounters, bumpBestStreak,
+  claimDailyBonus,
+  applyReferral, getReferralInfo,
+  createPromoCode, listPromoCodes, redeemPromo,
+  getPowerups, buyPowerup, consumePowerup,
+  createTournament, listTournaments, joinTournament, tournamentLeaderboard, closeTournament, tsForDb,
+  seedAchievements, unlockAchievement, getUserAchievements, allAchievementDefs,
+  jackpotGet, jackpotSetPool,
+  insertChat,
   close,
 };

@@ -76,18 +76,64 @@ router.post('/settings', ah(async (req, res) => {
   const key = String(req.body.key || '');
   const val = String(req.body.value || '');
   if (!/^[a-z_]+$/.test(key)) return res.status(400).json({ error: 'invalid key' });
-  // clamp RTP into a sane range
-  if (key === 'rtp') {
+  // clamp known numeric settings into sane ranges
+  const numeric = {
+    rtp: [0.1, 1.2], bullet_factor: [0.5, 2], bonus_rate: [0, 0.05],
+    jackpot_rate: [0, 0.1], jackpot_chance: [0, 0.01], jackpot_seed: [0, 100000],
+    daily_base: [0, 100000], daily_step: [0, 100000], daily_cap_streak: [1, 365],
+    referral_bonus: [0, 100000], vip_min_points: [0, 100000000],
+    pw_missile: [1, 100000], pw_freeze: [1, 100000], pw_chain: [1, 100000], pw_laser: [1, 100000],
+  };
+  if (numeric[key]) {
     const n = parseFloat(val);
-    if (!Number.isFinite(n) || n < 0.1 || n > 1.2) return res.status(400).json({ error: 'rtp must be between 0.10 and 1.20' });
+    const [lo, hi] = numeric[key];
+    if (!Number.isFinite(n) || n < lo || n > hi) return res.status(400).json({ error: `${key} must be between ${lo} and ${hi}` });
   }
-  if (key === 'bullet_factor') {
-    const n = parseFloat(val);
-    if (!Number.isFinite(n) || n < 0.5 || n > 2) return res.status(400).json({ error: 'bullet_factor must be between 0.5 and 2.0' });
-  }
+  if (key === 'ai_bots' && !['on', 'off'].includes(val)) return res.status(400).json({ error: "ai_bots must be 'on' or 'off'" });
+  if (key === 'event_active' && !['0', '1'].includes(val)) return res.status(400).json({ error: 'event_active must be 0 or 1' });
   await db.setSetting(key, val);
   rooms.invalidateSettings();
   res.json({ key, value: val });
+}));
+
+// ---- promo codes ----
+router.get('/promos', ah(async (req, res) => {
+  res.json(await db.listPromoCodes());
+}));
+
+router.post('/promos', ah(async (req, res) => {
+  const code = String(req.body.code || '').trim();
+  const points = parseInt(req.body.points, 10);
+  const uses = parseInt(req.body.uses, 10);
+  const expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt).toISOString() : null;
+  if (!/^[A-Z0-9]{3,24}$/.test(code.toUpperCase())) return res.status(400).json({ error: 'code must be 3-24 uppercase letters/numbers' });
+  if (!Number.isSafeInteger(points) || points <= 0) return res.status(400).json({ error: 'points must be a positive integer' });
+  if (!Number.isSafeInteger(uses) || uses < 1) return res.status(400).json({ error: 'uses must be a positive integer' });
+  if (expiresAt && Number.isNaN(new Date(expiresAt).getTime())) return res.status(400).json({ error: 'invalid expiry date' });
+  try {
+    const created = await db.createPromoCode({ code, points, uses, expiresAt });
+    res.json({ ok: true, code: created });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+}));
+
+// ---- tournaments ----
+router.post('/tournaments', ah(async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const entryFee = parseInt(req.body.entryFee, 10);
+  const startsAt = new Date(req.body.startsAt);
+  const endsAt = new Date(req.body.endsAt);
+  let winnerPcts = req.body.winnerPcts;
+  if (!name || name.length > 60) return res.status(400).json({ error: 'name required (max 60 chars)' });
+  if (!Number.isSafeInteger(entryFee) || entryFee < 0) return res.status(400).json({ error: 'entryFee must be a non-negative integer' });
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) return res.status(400).json({ error: 'valid startsAt and endsAt required' });
+  if (endsAt.getTime() <= startsAt.getTime()) return res.status(400).json({ error: 'endsAt must be after startsAt' });
+  if (!Array.isArray(winnerPcts) || winnerPcts.length === 0 || winnerPcts.some(p => !Number.isFinite(p) || p < 0)) {
+    winnerPcts = [50, 30, 20];
+  }
+  const id = await db.createTournament({ name, entryFee, startsAt, endsAt, winnerPcts });
+  res.json({ ok: true, id });
 }));
 
 // global stats

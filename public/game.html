@@ -13,18 +13,27 @@
     <div id="topbar">
       <div class="logo">FIRE<span>KIRIN</span></div>
       <div class="top-right">
+        <span id="jackpot-pill" class="jackpot-pill">💎 0</span>
         <span id="auth-bar" class="stat-pill hidden">👤 <span id="auth-user"></span></span>
+        <div class="xp-block" id="xp-block">
+          <span id="xp-level">LV 1</span>
+          <div class="xp-track"><div id="xp-fill"></div></div>
+        </div>
         <div class="game-mode-switch" aria-label="Game mode">
           <button id="btn-solo" class="mode-btn" title="Play in your own room">SOLO</button>
           <button id="btn-multiplayer" class="mode-btn" title="Queue with three other players">MULTI</button>
         </div>
         <span id="match-status" class="match-status" aria-live="polite"></span>
-        <button id="btn-logout" class="mode-btn hidden">LOG OUT</button>
+        <a id="btn-lobby" class="redeem-pill" href="/lobby" title="Back to the game lobby">🎮 Lobby</a>
+        <button id="btn-wallet" class="redeem-pill" title="Daily bonus, referrals, promo codes">🎁 Daily</button>
         <button id="btn-redeem" class="redeem-pill">💎 Redeem</button>
+        <button id="btn-chat" class="icon-btn" title="In-game chat">💬</button>
+        <button id="btn-logout" class="mode-btn hidden">LOG OUT</button>
         <button id="btn-sound" class="icon-btn" title="Sound on/off">🔊</button>
         <button id="btn-full" class="icon-btn" title="Fullscreen">⛶</button>
       </div>
     </div>
+    <div id="tier-row" class="tier-row"></div>
     <div id="bottombar">
       <div class="panel balance-panel"><div class="label">BALANCE</div><div class="value" id="balance">0</div></div>
       <div class="panel win-panel"><div class="label">WIN</div><div class="value" id="win">0</div></div>
@@ -34,9 +43,24 @@
         <button id="bet-up" class="round-btn">+</button>
       </div>
       <div class="weapon-row" id="weapon-row"></div>
+      <div class="powerup-row" id="powerup-row"></div>
+      <button id="btn-fury" class="fury-btn" title="Charge by firing — unleash FURY (press F)" disabled>
+        <span class="fury-cap">⚡ FURY</span>
+        <span class="fury-meter"><span id="fury-fill"></span></span>
+      </button>
       <button id="btn-auto" class="mode-btn">AUTO</button>
     </div>
   </div>
+  <div id="chat-panel" class="chat-panel hidden">
+    <div class="chat-head">CHAT</div>
+    <div id="chat-list" class="chat-list"></div>
+    <div class="chat-input-row">
+      <input id="chat-input" class="chat-input" maxlength="200" placeholder="Say something…">
+      <button id="chat-send" class="btn primary">SEND</button>
+    </div>
+  </div>
+  <div id="wallet-modal" class="modal hidden"></div>
+  <div id="shop-modal" class="modal hidden"></div>
   <div id="msg-layer"></div>
   <div id="mega-layer" class="mega-banner" style="display:none"></div>
   <div id="mini-layer"></div>

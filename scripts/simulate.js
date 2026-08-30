@@ -14,7 +14,8 @@
   const db = require('../server/db');
   const rng = require('../server/game/rng');
   const constants = require('../server/game/constants');
-  const { BETS } = constants;
+  const { ROOM_TIERS } = constants;
+  const BETS = [...new Set(Object.values(ROOM_TIERS).flatMap(t => t.bets))].sort((a, b) => a - b);
 
   const SHOTS = parseInt(process.argv[2] || '200000', 10);
   const TARGET = parseFloat(process.argv[3] || '0.96');

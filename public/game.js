@@ -5,13 +5,21 @@
 
 // ============================================================ constants
 const W = 1440, H = 810;                 // logical resolution (16:9)
-const BETS = [1, 2, 5, 10, 20, 50, 100];
 const FIRE_INTERVAL = 0.14;              // seconds between shots when holding
 const BULLET_SPEED = 640;
 const MAX_BOUNCES = 3;
-const requestedGameMode = new URLSearchParams(location.search).get('mode') === 'multiplayer'
-  ? 'multiplayer'
-  : 'solo';
+const params = new URLSearchParams(location.search);
+const requestedGameMode = params.get('mode') === 'multiplayer' ? 'multiplayer' : 'solo';
+const requestedTier = params.get('tier') || 'mid';
+
+// Stake tiers (mirrors server/game/constants.js ROOM_TIERS).
+const ROOM_TIERS = {
+  low:  { id: 'low',  label: 'LOW',  bets: [1, 2, 5],             vip: false },
+  mid:  { id: 'mid',  label: 'MID',  bets: [1, 2, 5, 10, 20],     vip: false },
+  high: { id: 'high', label: 'HIGH', bets: [5, 10, 20, 50, 100],  vip: false },
+  vip:  { id: 'vip',  label: 'VIP',  bets: [20, 50, 100, 200, 500], vip: true },
+};
+const tierBets = () => (ROOM_TIERS[state && state.tier] || ROOM_TIERS.mid).bets;
 
 // Weapon levels — each has a unique mechanic (mirrors server constants.js).
 const WEAPON_LEVELS = [
@@ -42,6 +50,8 @@ const SPECIES = [
   { id: 'thunder',  name: 'Thunder Hammerhead', mult: 35, weight: 3, r: 54, speed: 100, armor: 6, kind: 'thundershark', body: '#3d5a80', belly: '#dbe8f5', fin: '#28415f', stripe: '#ffd23c', hammer: true, glow: '#9fd8ff' },
   { id: 'shark',    name: 'Tiger Shark',   mult: 45,  weight: 2.5,r: 60, speed: 100, armor: 8,  kind: 'shark',  body: '#6e8494', belly: '#dbe6ec', fin: '#51636f', stripe: '#3a4a54' },
   { id: 'crab',     name: 'Bomb Crab',     mult: 12,  weight: 3,  r: 34, speed: 45,  armor: 3,  kind: 'crab',   body: '#e0483c', belly: '#ffb09e', fin: '#a82f26', stripe: '#701d17', special: 'aoe' },
+  { id: 'madshark', name: 'Mad Shark',     mult: 30,  weight: 2.0, r: 52, speed: 110, armor: 6,  kind: 'shark',  body: '#c23a2a', belly: '#ffc9a8', fin: '#7a1d10', stripe: '#ffea3a', special: 'aoe', bomb: true },
+  { id: 'dynamite', name: 'Dynamite Stick', mult: 20, weight: 2.0, r: 32, speed: 80,  armor: 2,  kind: 'dynamite', body: '#d2483a', belly: '#ffd9c9', fin: '#8a2418', stripe: '#ffd54a', special: 'aoe', bomb: true },
   { id: 'dragonkoi',name: 'Emperor Dragon-Koi', mult: 60, weight: 1.4, r: 42, speed: 120, armor: 10, kind: 'dragonkoi', body: '#c92a4e', belly: '#ffd98a', fin: '#ff8c1a', stripe: '#ffcf24', glow: '#ff9a2a' },
   { id: 'whale',    name: 'Blue Whale',    mult: 80,  weight: 0.8,r: 78, speed: 45,  armor: 15, kind: 'whale',  body: '#4a7ba6', belly: '#cfe2f0', fin: '#35597a', stripe: '#27435c' },
   { id: 'laser',    name: 'Laser Crab',     mult: 60,  weight: 1.0, r: 40, speed: 50,  armor: 12, kind: 'crab',   body: '#b048e0', belly: '#ffb0ff', fin: '#7a2fa0', stripe: '#33ddff', special: 'aoe', laser: true },
@@ -52,6 +62,8 @@ const SPECIES = [
 const BOSS = { id: 'kraken', name: 'KRAKEN', mult: 120, r: 80, speed: 55, kind: 'abysslord', tier: 'mega', armor: 20, body: '#5a4a8a', belly: '#c0a0ff', fin: '#3a2a6a', stripe: '#ffd23c', boss: true, sharedHp: 800 };
 const VARIABLE_BOSSES = [
   { id: 'goldendragon', name: 'GOLDEN DRAGON', multRange: [100, 500], expectedMult: 300, r: 76, speed: 60, kind: 'dragonkoi', tier: 'mega', armor: 25, body: '#ffcf24', belly: '#fff3a0', fin: '#e09010', stripe: '#a05a00', glow: '#ffe680', boss: true, variable: true, sharedHp: 1200 },
+  { id: 'kirin', name: 'FIRE KIRIN', multRange: [150, 600], expectedMult: 375, r: 84, speed: 55, kind: 'dragonkoi', tier: 'mega', armor: 28, body: '#ff5a1a', belly: '#ffd9a8', fin: '#c83200', stripe: '#ffe680', glow: '#ff9a2a', boss: true, variable: true, sharedHp: 1600 },
+  { id: 'phoenix', name: 'PHOENIX KING', multRange: [200, 800], expectedMult: 500, r: 88, speed: 70, kind: 'abysslord', tier: 'mega', armor: 30, body: '#ff3a6a', belly: '#ffd9a8', fin: '#ff8c1a', stripe: '#fff0c0', glow: '#ffcf4a', boss: true, variable: true, sharedHp: 2000 },
 ];
 
 // lookup tables: typeId -> def (for spawns received from the server)
@@ -90,7 +102,7 @@ const state = {
   balance: 0,            // authoritative value, pushed by server
   displayBalance: 0,     // odometer value that ticks toward balance
   totalWin: 0,
-  betIdx: 3,
+  betIdx: 2,
   weaponLevel: 0,
   auto: false,
   firing: false,
@@ -115,6 +127,20 @@ const state = {
   roomReady: false,
   gameMode: requestedGameMode,
   banned: false,
+  // progression / economy
+  tier: requestedTier,
+  level: 1,
+  xp: 0,
+  xpNeeded: 100,
+  jackpot: 0,
+  // fury / energy meter
+  fury: 0,               // 0..furyMax charge
+  furyMax: 100,
+  furyReady: false,      // meter full, ready to unleash
+  furyActive: false,     // fury window currently running
+  furyUntil: 0,          // ms timestamp fury ends
+  powerups: {},          // key -> count
+  aimPowerup: null,      // armed aim/target powerup waiting for a canvas click
   // lock-on targeting
   lockedFishId: null,
   // shared boss HP
@@ -124,7 +150,7 @@ const state = {
   nextVolleyId: 1,
 };
 
-const bet = () => BETS[state.betIdx];
+const bet = () => tierBets()[state.betIdx];
 const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -149,12 +175,47 @@ const hud = {
   msg: el('msg-layer'),
   mega: el('mega-layer'),
   mini: el('mini-layer'),
+  jackpot: el('jackpot-pill'),
+  btnFury: el('btn-fury'), furyFill: el('fury-fill'),
+  xpLevel: el('xp-level'), xpFill: el('xp-fill'),
+  tierRow: el('tier-row'),
+  powerupRow: el('powerup-row'),
+  btnWallet: el('btn-wallet'),
+  btnChat: el('btn-chat'),
+  chatPanel: el('chat-panel'), chatList: el('chat-list'), chatInput: el('chat-input'), chatSend: el('chat-send'),
+  walletModal: el('wallet-modal'),
+  shopModal: el('shop-modal'),
 };
 
 function refreshHUD() {
   hud.balance.textContent = Math.floor(state.displayBalance).toLocaleString();
   hud.win.textContent = Math.floor(state.totalWin).toLocaleString();
   hud.bet.textContent = bet() * WEAPON_LEVELS[state.weaponLevel].costMult;
+  hud.jackpot.textContent = '💎 ' + Math.floor(state.jackpot).toLocaleString();
+  hud.xpLevel.textContent = 'LV ' + state.level;
+  const pct = clamp((state.xp / (state.xpNeeded || 1)) * 100, 0, 100);
+  hud.xpFill.style.width = pct + '%';
+  updateFury();
+  refreshPowerupRow();
+}
+
+// Reflect the fury meter/state onto the fury button.
+function updateFury() {
+  if (!hud.btnFury) return;
+  const pctFury = clamp((state.fury / (state.furyMax || 100)) * 100, 0, 100);
+  if (hud.furyFill) hud.furyFill.style.width = pctFury + '%';
+  hud.btnFury.classList.toggle('ready', state.furyReady && !state.furyActive);
+  hud.btnFury.classList.toggle('active', state.furyActive);
+  hud.btnFury.disabled = !(state.furyReady && !state.furyActive);
+  document.body.classList.toggle('fury-on', state.furyActive);
+}
+
+// Ask the server to unleash fury (validated server-side).
+function activateFury() {
+  if (!socket || !state.furyReady || state.furyActive) return;
+  socket.emit('activateFury', (r) => {
+    if (r && r.ok) { SFX.bigWin && SFX.bigWin(); }
+  });
 }
 
 function selectGameMode(mode) {
@@ -181,6 +242,11 @@ function updateGameModeUI(room = null) {
 function applyRoomState(room) {
   state.gameMode = room.mode === 'multiplayer' ? 'multiplayer' : 'solo';
   state.roomReady = room.status === 'active';
+  // adopt the server-resolved tier (server downgrades VIP when under threshold)
+  if (room.tier && ROOM_TIERS[room.tier]) {
+    state.tier = room.tier;
+    state.betIdx = clamp(state.betIdx, 0, ROOM_TIERS[room.tier].bets.length - 1);
+  }
   if (room.reset) {
     state.fish = [];
     state.bullets = [];
@@ -197,7 +263,9 @@ function applyRoomState(room) {
     banner('MATCH FOUND · 4 PLAYERS');
     SFX.bossAlert();
   }
+  buildTierRow();
   updateGameModeUI(room);
+  refreshHUD();
 }
 
 // weapon selector buttons
@@ -214,6 +282,187 @@ function buildWeaponRow() {
   });
 }
 
+// ---- stake-tier selector (reloads with ?tier=) ----
+function buildTierRow() {
+  if (!hud.tierRow) return;
+  hud.tierRow.innerHTML = '';
+  const mode = state.gameMode || 'solo';
+  for (const t of Object.values(ROOM_TIERS)) {
+    const b = document.createElement('button');
+    b.className = 'tier-btn' + (t.id === state.tier ? ' on' : '');
+    b.textContent = t.label;
+    b.title = t.desc || '';
+    b.disabled = t.vip; // VIP entry handled server-side by points gate
+    b.onclick = () => {
+      if (t.id === state.tier) return;
+      location.href = '/game?mode=' + mode + (t.id === 'mid' ? '' : '&tier=' + t.id);
+    };
+    hud.tierRow.appendChild(b);
+  }
+}
+
+// ---- power-up quick bar ----
+const POWERUP_KEYS = [
+  { key: 'missile', icon: '🚀' },
+  { key: 'freeze', icon: '❄️' },
+  { key: 'chain', icon: '⚡' },
+  { key: 'laser', icon: '🔦' },
+];
+
+function refreshPowerupRow() {
+  if (!hud.powerupRow) return;
+  hud.powerupRow.innerHTML = '';
+  for (const p of POWERUP_KEYS) {
+    const n = state.powerups[p.key] || 0;
+    const b = document.createElement('button');
+    b.className = 'pw-btn' + (state.aimPowerup === p.key ? ' armed' : '') + (n === 0 ? ' empty' : '');
+    b.innerHTML = `${p.icon}<span class="pw-count">${n}</span>`;
+    b.title = p.key + (n === 0 ? ' — buy in the shop' : '');
+    b.onclick = () => {
+      if (n === 0) { openShop(); return; }
+      SFX.click();
+      if (p.key === 'freeze') {
+        socket.emit('usePowerup', { key: 'freeze' }, (r) => {
+          if (!r || !r.ok) banner('freeze failed');
+        });
+        return;
+      }
+      state.aimPowerup = state.aimPowerup === p.key ? null : p.key;
+      refreshPowerupRow();
+      banner(state.aimPowerup ? `${p.key.toUpperCase()} armed — tap the field to fire` : 'power-up cancelled');
+    };
+    hud.powerupRow.appendChild(b);
+  }
+  const shop = document.createElement('button');
+  shop.className = 'pw-btn shop';
+  shop.textContent = '🛒';
+  shop.title = 'Power-up shop';
+  shop.onclick = openShop;
+  hud.powerupRow.appendChild(shop);
+}
+
+// ---- power-up shop modal ----
+async function openShop() {
+  if (!hud.shopModal) return;
+  hud.shopModal.classList.remove('hidden');
+  hud.shopModal.innerHTML = '<div class="modal-card"><h2>⚡ POWER-UP SHOP</h2><div id="shop-list">Loading…</div><button class="btn" id="shop-close">Close</button></div>';
+  hud.shopModal.querySelector('#shop-close').onclick = () => hud.shopModal.classList.add('hidden');
+  const r = await fetch('/api/player/powerups', { credentials: 'include' });
+  const j = await r.json();
+  const list = hud.shopModal.querySelector('#shop-list');
+  list.innerHTML = '';
+  (j.catalog || []).forEach((p) => {
+    const owned = (j.inventory && j.inventory[p.key]) || 0;
+    const row = document.createElement('div');
+    row.className = 'shop-row';
+    row.innerHTML = `<span class="shop-icon">${p.icon}</span><span class="shop-name">${p.name}<small>${p.desc}</small></span><span class="shop-owned">own ${owned}</span>`;
+    const buy = document.createElement('button');
+    buy.className = 'btn primary';
+    buy.textContent = `${p.price.toLocaleString()} pts`;
+    buy.onclick = async () => {
+      const rr = await fetch('/api/player/powerups/buy', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: p.key }) });
+      const jj = await rr.json();
+      if (!rr.ok) { banner(jj.error || 'buy failed'); return; }
+      state.powerups = jj.inventory;
+      state.balance = jj.points;
+      state.displayBalance = jj.points;
+      banner(`${p.name} purchased`);
+      openShop();
+    };
+    row.appendChild(buy);
+    list.appendChild(row);
+  });
+}
+
+// ---- chat ----
+function toggleChat() {
+  if (!hud.chatPanel) return;
+  hud.chatPanel.classList.toggle('hidden');
+  if (!hud.chatPanel.classList.contains('hidden')) hud.chatInput.focus();
+}
+function sendChat() {
+  const text = hud.chatInput.value.trim();
+  if (!text) return;
+  socket.emit('chat', { message: text });
+  hud.chatInput.value = '';
+}
+
+// ---- wallet modal: daily bonus / referral / promo ----
+async function openWallet() {
+  if (!hud.walletModal) return;
+  hud.walletModal.classList.remove('hidden');
+  hud.walletModal.innerHTML = '<div class="modal-card"><h2>🎁 WALLET</h2><div id="wallet-body">Loading…</div><button class="btn" id="wallet-close">Close</button></div>';
+  hud.walletModal.querySelector('#wallet-close').onclick = () => hud.walletModal.classList.add('hidden');
+  const body = hud.walletModal.querySelector('#wallet-body');
+  body.innerHTML = '';
+
+  // daily
+  const daily = await fetch('/api/player/daily', { credentials: 'include' }).then(r => r.json());
+  const dRow = document.createElement('div');
+  dRow.className = 'wallet-row';
+  dRow.innerHTML = `<span>📅 Daily login <small>streak ${daily.streak || 0}</small></span>`;
+  const dBtn = document.createElement('button');
+  dBtn.className = 'btn primary';
+  dBtn.textContent = daily.claimable ? 'CLAIM' : 'CLAIMED ✓';
+  dBtn.disabled = !daily.claimable;
+  dBtn.onclick = async () => {
+    const rr = await fetch('/api/player/daily', { method: 'POST', credentials: 'include' });
+    const jj = await rr.json();
+    if (!rr.ok) { banner(jj.error || 'daily failed'); return; }
+    state.balance = jj.points; state.displayBalance = jj.points;
+    banner(`DAILY BONUS +${jj.bonus.toLocaleString()}`);
+    openWallet();
+  };
+  dRow.appendChild(dBtn);
+  body.appendChild(dRow);
+
+  // referral
+  const ref = await fetch('/api/player/referral', { credentials: 'include' }).then(r => r.json());
+  const refRow = document.createElement('div');
+  refRow.className = 'wallet-row';
+  refRow.innerHTML = `<span>🤝 Referral <small>${ref.referred ? 'you were referred' : 'share your code'}: ${ref.code || '—'} · ${ref.referredCount} referred · +${ref.totalBonus} earned</small></span>`;
+  if (!ref.referred) {
+    const refIn = document.createElement('input');
+    refIn.placeholder = 'enter a referral code';
+    refIn.className = 'wallet-input';
+    const refBtn = document.createElement('button');
+    refBtn.className = 'btn';
+    refBtn.textContent = 'APPLY';
+    refBtn.onclick = async () => {
+      const rr = await fetch('/api/player/referral', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: refIn.value }) });
+      const jj = await rr.json();
+      if (!rr.ok) { banner(jj.error || 'referral failed'); return; }
+      banner(`REFERRAL BONUS +${jj.bonus.toLocaleString()}`);
+      openWallet();
+    };
+    refRow.appendChild(refIn);
+    refRow.appendChild(refBtn);
+  }
+  body.appendChild(refRow);
+
+  // promo
+  const promRow = document.createElement('div');
+  promRow.className = 'wallet-row';
+  promRow.innerHTML = '<span>🎟️ Promo code</span>';
+  const promIn = document.createElement('input');
+  promIn.placeholder = 'enter promo code';
+  promIn.className = 'wallet-input';
+  const promBtn = document.createElement('button');
+  promBtn.className = 'btn';
+  promBtn.textContent = 'REDEEM';
+  promBtn.onclick = async () => {
+    const rr = await fetch('/api/player/promo', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: promIn.value }) });
+    const jj = await rr.json();
+    if (!rr.ok) { banner(jj.error || 'promo failed'); return; }
+    state.balance = jj.balance; state.displayBalance = jj.balance;
+    banner(`PROMO +${jj.points.toLocaleString()}`);
+    openWallet();
+  };
+  promRow.appendChild(promIn);
+  promRow.appendChild(promBtn);
+  body.appendChild(promRow);
+}
+
 function banner(text) {
   const d = document.createElement('div');
   d.className = 'banner';
@@ -228,7 +477,7 @@ function megaBanner(text) {
   setTimeout(() => { hud.mega.style.display = 'none'; hud.mega.innerHTML = ''; }, 1700);
 }
 
-hud.betUp.addEventListener('click', () => { state.betIdx = Math.min(BETS.length - 1, state.betIdx + 1); SFX.click(); refreshHUD(); });
+hud.betUp.addEventListener('click', () => { state.betIdx = Math.min(tierBets().length - 1, state.betIdx + 1); SFX.click(); refreshHUD(); });
 hud.betDown.addEventListener('click', () => { state.betIdx = Math.max(0, state.betIdx - 1); SFX.click(); refreshHUD(); });
 hud.auto.addEventListener('click', () => {
   state.auto = !state.auto;
@@ -237,7 +486,19 @@ hud.auto.addEventListener('click', () => {
 });
 hud.solo.addEventListener('click', () => selectGameMode('solo'));
 hud.multiplayer.addEventListener('click', () => selectGameMode('multiplayer'));
+if (hud.btnFury) hud.btnFury.addEventListener('click', activateFury);
+// 'F' unleashes fury (ignored while typing in the chat box)
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'f' || e.key === 'F') {
+    if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+    activateFury();
+  }
+});
 hud.redeem.addEventListener('click', openRedeemModal);
+if (hud.btnWallet) hud.btnWallet.addEventListener('click', openWallet);
+if (hud.btnChat) hud.btnChat.addEventListener('click', toggleChat);
+if (hud.chatSend) hud.chatSend.addEventListener('click', sendChat);
+if (hud.chatInput) hud.chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
 hud.sound.addEventListener('click', () => {
   hud.sound.textContent = SFX.toggle() ? '🔊' : '🔇';
 });
@@ -305,8 +566,29 @@ canvas.addEventListener('pointerdown', e => {
   SFX.unlock();
   const p = pointerPos(e);
   state.aim = p;
-  // lock-on: tap a fish to focus fire, tap empty space to clear
   const tapped = pickFishAt(p.x, p.y);
+
+  // armed power-up: consume the tap as its target
+  if (state.aimPowerup && socket) {
+    const key = state.aimPowerup;
+    const payload = { key };
+    if (key === 'laser') {
+      if (!tapped) { banner('LASER — tap a fish to target'); return; }
+      payload.fishId = tapped.id;
+    } else {
+      payload.x = Math.round(p.x);
+      payload.y = Math.round(p.y);
+    }
+    socket.emit('usePowerup', payload, (r) => {
+      if (r && r.ok) banner('POWER-UP FIRED — ' + key.toUpperCase());
+      else banner((r && r.reason) ? 'power-up failed: ' + r.reason : 'power-up failed');
+    });
+    state.aimPowerup = null;
+    refreshPowerupRow();
+    return;
+  }
+
+  // lock-on: tap a fish to focus fire, tap empty space to clear
   if (tapped) {
     state.lockedFishId = tapped.id;
   } else {
@@ -345,7 +627,9 @@ function bezierTangent(p, t) {
 
 // ---- server-driven fish spawn ----
 function addFishFromServer(s) {
-  const def = FISH_BY_ID[s.typeId];
+  // server def overrides the client base def (e.g. shielded fish raise armor/mult)
+  const base = FISH_BY_ID[s.typeId];
+  const def = (s.def && s.def.id) ? Object.assign({}, base || s.def, s.def) : base;
   if (!def) return;
   if (state.fish.some(f => f.id === s.fishId)) return;
   const fish = {
@@ -526,6 +810,9 @@ function onServerKill(k) {
     else if (fish && fish.boss) { banner((k.name || 'BOSS') + ' DOWN! +' + payout.toLocaleString()); SFX.bigWin(); SFX.boom(); }
     else if (big) { banner('BIG WIN +' + payout.toLocaleString()); SFX.bigWin(); }
     else SFX.kill();
+
+    // fury feeding-frenzy spark on boosted catches
+    if (k.fury) state.texts.push({ x: fx + rand(-10, 10), y: fy + 16, text: '⚡', life: 0.6, maxLife: 0.6, big: false });
 
     // hit-stop + screen shake on big wins
     if (mult >= 50) { state.hitstop = 0.13; state.shakeTime = 0.45; state.shakeAmp = Math.min(26, 8 + mult / 20); }
@@ -1727,8 +2014,47 @@ const PAINTERS = {
   shark: paintShark, crab: paintCrab, whale: paintWhale,
   mandarin: paintMandarin, octomage: paintOcto, thundershark: paintThunderShark,
   dragonkoi: paintDragonKoi, abysslord: paintAbyssLord,
-  eel: paintSerpentRay, pearl: paintPuffer,
+  eel: paintSerpentRay, pearl: paintPuffer, dynamite: paintDynamite,
+  // HP-bar bosses reuse the closest procedural painter (distinguished by colour).
+  kraken: paintAbyssLord, kirin: paintDragonKoi, phoenix: paintDragonKoi,
 };
+
+// Dynamite Stick — a bundled stick of red dynamite with a lit fuse.
+function paintDynamite(def, wag) {
+  const r = def.r;
+  g.save();
+  g.rotate(Math.sin(wag) * 0.25);
+  // stick body
+  const grad = g.createLinearGradient(0, -r, 0, r);
+  grad.addColorStop(0, def.body); grad.addColorStop(1, '#9c2a1c');
+  g.fillStyle = grad;
+  g.beginPath();
+  g.roundRect(-r * 0.35, -r * 0.8, r * 0.7, r * 1.6, r * 0.3);
+  g.fill();
+  // metal cap
+  g.fillStyle = '#e6c35a';
+  g.beginPath();
+  g.roundRect(-r * 0.38, -r * 0.95, r * 0.76, r * 0.3, r * 0.12);
+  g.fill();
+  // hazard band
+  g.fillStyle = def.stripe;
+  g.fillRect(-r * 0.35, -r * 0.15, r * 0.7, r * 0.24);
+  // fuse
+  g.strokeStyle = '#8a5a2a';
+  g.lineWidth = 3;
+  g.beginPath();
+  g.moveTo(0, -r * 0.95);
+  g.quadraticCurveTo(r * 0.2, -r * 1.4, r * 0.45, -r * 1.35);
+  g.stroke();
+  // spark
+  const spark = 0.6 + 0.4 * Math.sin(wag * 10);
+  g.fillStyle = `rgba(255, ${Math.floor(200 + 55 * spark)}, 90, ${spark})`;
+  g.beginPath();
+  g.arc(r * 0.45, -r * 1.35, 5 + spark * 2, 0, Math.PI * 2);
+  g.fill();
+  g.restore();
+  paintEye(r * 0.1, -r * 0.45, r * 0.1);
+}
 
 // ============================================================ render
 function drawBackground() {
@@ -1839,7 +2165,7 @@ function drawFishAll() {
       g.fill();
       g.restore();
     }
-    PAINTERS[f.def.kind](f.def, f.wag, state.time);
+    (PAINTERS[f.def.kind] || paintFish)(f.def, f.wag, state.time);
 
     if (f.flash > 0) {
       g.globalAlpha = f.flash * 6;
@@ -1901,7 +2227,7 @@ function drawFishAll() {
       g.restore();
     }
 
-    // ---- armor indicator ----
+    // ---- armored fish: shield badge ----
     if ((f.def.armor || 0) > 0 && !f.dying) {
       g.save();
       g.translate(f.x, f.y);
@@ -1927,6 +2253,26 @@ function drawFishAll() {
       g.font = 'bold 9px Arial';
       g.textAlign = 'center';
       g.fillText(f.def.armor, ax, ay + 4);
+      g.restore();
+    }
+
+    // ---- shielded fish: shimmering bubble shell ----
+    if (f.def.shielded && !f.dying) {
+      g.save();
+      g.translate(f.x, f.y);
+      const sr = f.def.r * 1.5;
+      const sw = 0.5 + 0.3 * Math.sin(state.time * 3);
+      g.globalAlpha = 0.35 + 0.2 * Math.sin(state.time * 4);
+      g.strokeStyle = '#9fdcff';
+      g.lineWidth = 2.5;
+      g.beginPath(); g.arc(0, 0, sr, 0, Math.PI * 2); g.stroke();
+      g.globalAlpha *= sw;
+      g.strokeStyle = '#cfeaff';
+      g.beginPath(); g.arc(0, 0, sr * 1.15, 0, Math.PI * 2); g.stroke();
+      // highlight glint
+      g.globalAlpha = 0.5;
+      g.fillStyle = '#eaffff';
+      g.beginPath(); g.arc(-sr * 0.4, -sr * 0.4, sr * 0.16, 0, Math.PI * 2); g.fill();
       g.restore();
     }
 
@@ -2264,14 +2610,19 @@ async function init() {
   myUserId = me.id;
   state.balance = me.points;
   state.displayBalance = me.points;
+  state.level = me.level || 1;
+  state.xp = me.xp || 0;
+  state.xpNeeded = me.xpNeeded || 100;
+  state.powerups = me.powerups || {};
   hud.authBar.classList.remove('hidden');
   hud.authUser.textContent = me.username;
   hud.btnLogout.classList.remove('hidden');
   hud.btnLogout.onclick = async () => { await Auth.logout(); location.href = '/auth'; };
+  buildTierRow();
   refreshHUD();
 
   // connect socket (cookie auth handled server-side)
-  socket = io({ withCredentials: true, auth: { gameMode: requestedGameMode } });
+  socket = io({ withCredentials: true, auth: { gameMode: requestedGameMode, tier: requestedTier } });
   socket.on('connect', () => { state.connected = true; state.roomReady = false; updateGameModeUI(); });
   socket.on('disconnect', () => { state.connected = false; state.roomReady = false; updateGameModeUI(); });
   socket.on('roomState', applyRoomState);
@@ -2315,6 +2666,89 @@ async function init() {
   });
   socket.on('bossHp', bh => {
     state.bossHp = { fishId: bh.fishId, hp: bh.hp, maxHp: bh.maxHp, name: bh.name };
+  });
+  // ---- new economy / progression events ----
+  socket.on('jackpotState', jp => { state.jackpot = jp.pool || 0; refreshHUD(); });
+  socket.on('jackpot', jp => {
+    state.jackpot = jp.pool || 0;
+    refreshHUD();
+    megaBanner('💎 JACKPOT! +' + (jp.amount || 0).toLocaleString() + ' 💎');
+    banner('JACKPOT WON: +' + (jp.amount || 0).toLocaleString());
+    SFX.bigWin();
+  });
+  // ---- fury / energy meter ----
+  socket.on('furyMeter', m => {
+    state.fury = m.value || 0;
+    state.furyMax = m.max || 100;
+    if (state.fury < state.furyMax) state.furyReady = false;
+    updateFury();
+  });
+  socket.on('furyReady', () => {
+    state.furyReady = true;
+    updateFury();
+    banner('⚡ FURY READY — press F');
+    SFX.bossAlert && SFX.bossAlert();
+  });
+  socket.on('furyStart', d => {
+    state.furyActive = true;
+    state.furyReady = false;
+    state.fury = 0;
+    state.furyUntil = Date.now() + (d.ms || 8000);
+    updateFury();
+    megaBanner('⚡ FURY MODE ⚡');
+    state.shakeTime = 0.4; state.shakeAmp = 8;
+  });
+  socket.on('furyEnd', () => {
+    state.furyActive = false;
+    state.furyUntil = 0;
+    updateFury();
+  });
+  socket.on('levelup', lu => {
+    state.level = lu.level;
+    state.xp = lu.xp || 0;
+    state.xpNeeded = lu.xpNeeded || state.xpNeeded;
+    refreshHUD();
+    banner('LEVEL ' + lu.level + ' — +' + (lu.reward || 0).toLocaleString() + ' pts');
+    buildWeaponRow();
+  });
+  socket.on('achievement', a => {
+    banner('🏆 ' + a.name + ' — +' + (a.reward || 0).toLocaleString());
+    megaBanner('🏆 ' + a.name + '!');
+    SFX.bossAlert();
+  });
+  socket.on('powerups', inv => { state.powerups = inv || {}; refreshHUD(); });
+  socket.on('weapon', wl => { state.weaponLevel = wl || 0; buildWeaponRow(); refreshHUD(); });
+  socket.on('powerup', p => {
+    // ring VFX where the power-up detonated
+    state.nets.push({ x: p.x, y: p.y, r: 10, max: 220 + p.kills.length * 20, life: 0.5, maxLife: 0.5 });
+    state.shakeTime = 0.25; state.shakeAmp = 6;
+    banner((p.kills || []).length + ' fish caught by ' + p.key.toUpperCase());
+    if (p.kills && p.kills.length > 0) SFX.bigWin();
+  });
+  socket.on('freezeAll', f => {
+    const until = Date.now() + (f.duration || 3) * 1000;
+    for (const fish of state.fish) {
+      const now = Date.now();
+      fish.frozenElapsed = fish.age + (now - fish.receivedAt);
+      fish.frozenUntil = until;
+    }
+    banner('❄️ ALL FISH FROZEN');
+  });
+  socket.on('botShot', b => {
+    // short tracer for AI opponents
+    state.particles.push({ x: b.x, y: b.y, vx: Math.cos(b.angle) * 500, vy: Math.sin(b.angle) * 500, life: 0.18, maxLife: 0.18, color: b.color || '#ff8c5a', size: 3 });
+  });
+  socket.on('chatMsg', m => {
+    if (!hud.chatList) return;
+    const row = document.createElement('div');
+    row.className = 'chat-msg';
+    row.textContent = m.user + ': ' + m.text;
+    hud.chatList.appendChild(row);
+    hud.chatList.scrollTop = hud.chatList.scrollHeight;
+  });
+  // close any open modal when clicking the backdrop
+  [hud.walletModal, hud.shopModal].forEach(m => {
+    if (m) m.addEventListener('click', e => { if (e.target === m) m.classList.add('hidden'); });
   });
 
   // debug exports (handy for the test harness; harmless in prod)

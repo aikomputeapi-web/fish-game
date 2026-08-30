@@ -16,11 +16,11 @@ window.Auth = (() => {
     });
     return { ok: r.ok, status: r.status, data: r.ok ? await r.json() : await r.json() };
   }
-  async function register(username, email, password) {
+  async function register(username, email, password, referralCode) {
     const r = await fetch('/api/auth/register', {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, password }),
+      body: JSON.stringify({ username, email, password, referralCode }),
     });
     return { ok: r.ok, status: r.status, data: r.ok ? await r.json() : await r.json() };
   }
@@ -36,7 +36,7 @@ window.Auth = (() => {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
   }
   // Redirect by role. Falls back to the login page.
-  function redirectByRole(role, { ownerPath = '/admin', managerPath = '/manager', playerPath = '/game' } = {}) {
+  function redirectByRole(role, { ownerPath = '/admin', managerPath = '/manager', playerPath = '/lobby' } = {}) {
     if (role === 'owner') location.href = ownerPath;
     else if (role === 'manager') location.href = managerPath;
     else if (role === 'player') location.href = playerPath;

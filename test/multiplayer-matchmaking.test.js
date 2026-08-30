@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { after, test } = require('node:test');
+const { after, before, test } = require('node:test');
 
 const dbPath = path.join(os.tmpdir(), `fire-kirin-matchmaking-${process.pid}-${Date.now()}.sqlite`);
 process.env.SQLITE_PATH = dbPath;
@@ -12,6 +12,8 @@ delete process.env.DATABASE_URL;
 
 const db = require('../server/db');
 const rooms = require('../server/game/rooms');
+
+before(async () => { await db.migrate(); });
 
 class FakeSocket {
   constructor(id, username, gameMode = 'multiplayer') {
@@ -64,7 +66,7 @@ test('multiplayer matchmaking groups exactly four queued players into one room',
 
   const roomKeys = new Set(players.map(player => player.data.roomKey));
   assert.equal(roomKeys.size, 1);
-  assert.match([...roomKeys][0], /^multiplayer:\d+$/);
+  assert.match([...roomKeys][0], /^multi:mid:\d+$/);
   for (const player of players) {
     const state = player.last('roomState');
     assert.equal(state.mode, 'multiplayer');
@@ -83,7 +85,7 @@ test('a fifth player stays queued until another full group can be formed', () =>
 
   assert.equal(player.data.roomKey, null);
   assert.deepEqual(player.last('roomState'), {
-    mode: 'multiplayer', status: 'waiting', reset: true, position: 1, queued: 1, required: 4,
+    mode: 'multiplayer', tier: 'mid', status: 'waiting', reset: true, position: 1, queued: 1, required: 4,
   });
 
   let fireResult = null;

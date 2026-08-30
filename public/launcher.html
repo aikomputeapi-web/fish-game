@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fire Kirin — Game Lobby</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --gold: #ffcf4a; --teal: #2e7ea8; --ink: #03101c; }
+  body {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    color: #cfeeff; min-height: 100vh;
+    background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(46, 126, 168, .35), transparent),
+      linear-gradient(180deg, #041826 0%, #020a12 100%);
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 16px 22px; border-bottom: 1px solid rgba(46, 126, 168, .35);
+    background: rgba(3, 16, 28, .7); backdrop-filter: blur(6px);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .logo { font-size: 26px; font-weight: 900; letter-spacing: 2px; color: #fff; text-shadow: 0 0 16px rgba(255, 190, 0, .5); }
+  .logo span { color: var(--gold); }
+  .spacer { flex: 1; }
+  .pill {
+    padding: 8px 14px; border-radius: 10px; font-weight: 800; font-variant-numeric: tabular-nums;
+    border: 2px solid var(--teal); background: rgba(3, 24, 42, .85); color: #cfeeff;
+  }
+  .pill.gold { border-color: #ffb300; color: #ffe27a; text-shadow: 0 0 10px rgba(255, 190, 0, .8);
+    background: linear-gradient(180deg, rgba(90, 60, 0, .9), rgba(40, 26, 0, .95)); }
+  button.pill { cursor: pointer; }
+  h1.section { font-size: 15px; letter-spacing: 3px; color: #7fb8d8; text-transform: uppercase; margin: 26px 22px 4px; }
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 18px; padding: 14px 22px 40px; max-width: 1200px; margin: 0 auto;
+  }
+  .cab {
+    position: relative; border-radius: 16px; overflow: hidden; aspect-ratio: 3 / 4;
+    border: 2px solid rgba(46, 126, 168, .5); cursor: pointer;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    transition: transform .15s, box-shadow .15s, border-color .15s;
+    text-decoration: none; color: inherit;
+  }
+  .cab.play:hover { transform: translateY(-4px); border-color: var(--gold); box-shadow: 0 10px 30px rgba(0, 0, 0, .5), 0 0 24px rgba(255, 190, 0, .35); }
+  .cab .art { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 90px; filter: drop-shadow(0 6px 14px rgba(0, 0, 0, .5)); }
+  .cab .cap {
+    position: relative; z-index: 2; padding: 14px 14px 16px;
+    background: linear-gradient(180deg, transparent, rgba(2, 8, 14, .92) 60%);
+  }
+  .cab .title { font-size: 18px; font-weight: 900; color: #fff; letter-spacing: .5px; }
+  .cab .sub { font-size: 12px; color: #9fd0ea; margin-top: 2px; }
+  .cab .go {
+    display: inline-block; margin-top: 10px; padding: 8px 16px; border-radius: 9px;
+    font-weight: 800; letter-spacing: 1px; font-size: 13px;
+    background: linear-gradient(180deg, #ffd75e, #f0a800); color: #3a2600;
+  }
+  .cab.soon { cursor: default; filter: saturate(.5) brightness(.7); }
+  .cab.soon:hover { transform: none; }
+  .ribbon {
+    position: absolute; top: 14px; right: -34px; z-index: 3; transform: rotate(45deg);
+    background: #b23; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px;
+    padding: 4px 40px; box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
+  }
+  .hot { position: absolute; top: 12px; left: 12px; z-index: 3; background: var(--gold); color: #3a2600;
+    font-size: 11px; font-weight: 900; letter-spacing: 1px; padding: 4px 9px; border-radius: 6px; }
+  footer { text-align: center; color: #5a89a5; font-size: 12px; padding: 24px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">FIRE<span>KIRIN</span></div>
+  <span class="pill" id="user-pill">👤 —</span>
+  <span class="pill gold" id="jackpot-pill">💎 —</span>
+  <div class="spacer"></div>
+  <span class="pill" id="balance-pill">🪙 —</span>
+  <button class="pill" id="btn-logout">LOG OUT</button>
+</header>
+
+<h1 class="section">Featured</h1>
+<div class="grid" id="grid"></div>
+
+<footer>All games server-authoritative · provably-fair RTP · procedurally rendered — no external assets.</footer>
+
+<script src="/auth.js"></script>
+<script>
+'use strict';
+// Game catalogue. Only `href` entries are playable; the rest are placeholders.
+const GAMES = [
+  { title: 'Reef Fortune', sub: 'Arcade fish shooter · SOLO', emoji: '🐠', bg: 'radial-gradient(circle at 50% 40%, #0e6b8a, #04283a)', href: '/game', hot: true },
+  { title: 'Reef Fortune', sub: '4-player shared tank · MULTI', emoji: '🎣', bg: 'radial-gradient(circle at 50% 40%, #0e8a6b, #04382a)', href: '/game?mode=multiplayer' },
+  { title: 'Golden Dragon', sub: 'Boss-hunt jackpot table', emoji: '🐉', bg: 'radial-gradient(circle at 50% 40%, #8a6b0e, #382a04)', soon: true },
+  { title: 'Ocean Blitz', sub: 'Keno lightning draws', emoji: '🌊', bg: 'radial-gradient(circle at 50% 40%, #0e4b8a, #041a38)', soon: true },
+  { title: 'Lucky Buffalo', sub: '5-reel slots', emoji: '🦬', bg: 'radial-gradient(circle at 50% 40%, #6b3a0e, #382004)', soon: true },
+  { title: 'Phoenix Poker', sub: 'Video poker', emoji: '🔥', bg: 'radial-gradient(circle at 50% 40%, #8a2e3a, #380410)', soon: true },
+];
+
+function cabinet(g) {
+  const el = document.createElement(g.href ? 'a' : 'div');
+  el.className = 'cab ' + (g.href ? 'play' : 'soon');
+  if (g.href) el.href = g.href;
+  el.innerHTML =
+    '<div class="art" style="background:' + g.bg + '">' + g.emoji + '</div>' +
+    (g.hot ? '<div class="hot">HOT</div>' : '') +
+    (g.soon ? '<div class="ribbon">SOON</div>' : '') +
+    '<div class="cap"><div class="title">' + g.title + '</div>' +
+    '<div class="sub">' + g.sub + '</div>' +
+    (g.href ? '<span class="go">▶ PLAY</span>' : '') + '</div>';
+  return el;
+}
+
+(async () => {
+  // gate: must be a logged-in player
+  const who = await Auth.me();
+  if (!who) { location.href = '/auth'; return; }
+  if (who.role && who.role !== 'player') { Auth.redirectByRole(who.role); return; }
+
+  const grid = document.getElementById('grid');
+  for (const g of GAMES) grid.appendChild(cabinet(g));
+
+  document.getElementById('btn-logout').addEventListener('click', async () => { await Auth.logout(); location.href = '/auth'; });
+
+  async function refresh() {
+    try {
+      const r = await fetch('/api/player/lobby', { credentials: 'include' });
+      if (!r.ok) return;
+      const d = await r.json();
+      document.getElementById('user-pill').textContent = '👤 ' + d.username + '  ·  LV ' + d.level;
+      document.getElementById('balance-pill').textContent = '🪙 ' + Math.floor(d.balance).toLocaleString();
+      document.getElementById('jackpot-pill').textContent = '💎 ' + Math.floor(d.jackpot).toLocaleString();
+    } catch (_) {}
+  }
+  refresh();
+  setInterval(refresh, 5000);
+})();
+</script>
+</body>
+</html>

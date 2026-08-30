@@ -29,6 +29,8 @@ const FISH = [
   { id: 'crab',     name: 'Bomb Crab',     mult: 12,  tier: 'mid', weight: 3,  r: 34,  speed: 45,  armor: 3,  kind: 'crab',     body: '#e0483c', belly: '#ffb09e', fin: '#a82f26', stripe: '#701d17', special: 'aoe' },
   { id: 'laser',    name: 'Laser Crab',     mult: 60,  tier: 'mega',weight: 1.0, r: 40, speed: 50,  armor: 12, kind: 'crab',     body: '#b048e0', belly: '#ffb0ff', fin: '#7a2fa0', stripe: '#33ddff', special: 'aoe', laser: true },
   { id: 'eel',      name: 'Electric Eel',   mult: 90,  tier: 'mega',weight: 0.9, r: 46, speed: 75,  armor: 14, kind: 'eel',      body: '#7adfff', belly: '#e6fbff', fin: '#3aa0c8', stripe: '#ffea3a', special: 'aoe', glow: '#aef6ff' },
+  { id: 'madshark', name: 'Mad Shark',      mult: 30,  tier: 'mid', weight: 2.0, r: 52, speed: 110, armor: 6,  kind: 'shark',    body: '#c23a2a', belly: '#ffc9a8', fin: '#7a1d10', stripe: '#ffea3a', special: 'aoe', bomb: true },
+  { id: 'dynamite', name: 'Dynamite Stick', mult: 20,  tier: 'mid', weight: 2.0, r: 32, speed: 80,  armor: 2,  kind: 'dynamite', body: '#d2483a', belly: '#ffd9c9', fin: '#8a2418', stripe: '#ffd54a', special: 'aoe', bomb: true },
   // ---- bonus pearl ----
   { id: 'pearl',    name: 'Bonus Pearl',    mult: 5,   tier: 'minnow',weight: 0.6, r: 28, speed: 80,  armor: 0,  kind: 'pearl',    body: '#fff3a0', belly: '#ffffff', fin: '#ffcf4a', stripe: '#ff9a3a', special: 'bonus', glow: '#fff6c8' },
 ];
@@ -38,6 +40,8 @@ const BOSS = { id: 'kraken', name: 'KRAKEN', mult: 120, r: 80, speed: 55, kind: 
 // variable bosses — display a range; death-check uses the expected mult.
 const VARIABLE_BOSSES = [
   { id: 'goldendragon', name: 'GOLDEN DRAGON', multRange: [100, 500], expectedMult: 300, r: 76, speed: 60, kind: 'dragonkoi', tier: 'mega', armor: 25, body: '#ffcf24', belly: '#fff3a0', fin: '#e09010', stripe: '#a05a00', glow: '#ffe680', boss: true, variable: true, sharedHp: 1200 },
+  { id: 'kirin', name: 'FIRE KIRIN', multRange: [150, 600], expectedMult: 375, r: 84, speed: 55, kind: 'kirin', tier: 'mega', armor: 28, body: '#ff5a1a', belly: '#ffd9a8', fin: '#c83200', stripe: '#ffe680', glow: '#ff9a2a', boss: true, variable: true, sharedHp: 1600 },
+  { id: 'phoenix', name: 'PHOENIX KING', multRange: [200, 800], expectedMult: 500, r: 88, speed: 70, kind: 'phoenix', tier: 'mega', armor: 30, body: '#ff3a6a', belly: '#ffd9a8', fin: '#ff8c1a', stripe: '#fff0c0', glow: '#ffcf4a', boss: true, variable: true, sharedHp: 2000 },
 ];
 
 function fishTable() {

@@ -7,6 +7,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./db');
+const { xpNeeded } = require('./game/progression');
 const { sendVerificationEmail } = require('./mailer');
 
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -91,8 +92,15 @@ router.post('/register', ah(async (req, res) => {
   const { token, expires } = newVerifyToken();
   const user = await db.createUser(username, hash, { email, verifyToken: token, verifyExpires: expires });
   await sendVerificationEmail(email, username, token);
+  // optional referral code — never blocks signup; invalid codes are ignored
+  let referralApplied = false;
+  const referralCode = String(req.body.referralCode || '').trim();
+  if (referralCode) {
+    const r = await db.applyReferral(user.id, referralCode);
+    referralApplied = !!(r && r.ok);
+  }
   // no auth cookie yet — account activates once the email link is clicked
-  res.json({ id: user.id, username: user.username, pendingVerification: true, email });
+  res.json({ id: user.id, username: user.username, pendingVerification: true, email, referralApplied });
 }));
 
 // email link target: verifies the account, logs the user in, sends them to the app
@@ -156,8 +164,21 @@ router.get('/me', ah(async (req, res) => {
   if (!u) return res.json(null);
   const row = await db.getUser(u.id);
   if (!row) return res.json(null);
+  const level = Number(row.level) || 1;
+  const [referral, powerups, achievements] = await Promise.all([
+    db.getReferralInfo(row.id),
+    db.getPowerups(row.id),
+    db.getUserAchievements(row.id),
+  ]);
   res.json({
     id: row.id, username: row.username, points: row.points, role: row.role,
     banned: !!row.banned, managerId: row.manager_id,
+    level, xp: Number(row.xp) || 0, xpNeeded: xpNeeded(level),
+    dailyStreak: Number(row.daily_streak) || 0,
+    lastDailyClaim: row.last_daily_claim || null,
+    referralCode: referral.code, referred: referral.referred,
+    referredCount: referral.referredCount, referralBonus: referral.totalBonus,
+    powerups,
+    achievements,
   });
 }));
