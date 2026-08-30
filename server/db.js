@@ -13,11 +13,13 @@ let sqliteTransactionQueue = Promise.resolve();
 
 if (ENGINE === 'pg') {
   const { Pool } = require('pg');
-  const isRender = !!process.env.RENDER || process.env.DATABASE_URL?.includes('render.com');
+  // Render external Postgres requires SSL; internal connections (dpg-xxx-a) do not.
+  const dbUrl = process.env.DATABASE_URL || '';
+  const needsSsl = dbUrl.includes('.render.com') || dbUrl.includes('.oregon-postgres.render.com');
   pgPool = new Pool({
     connectionString: process.env.DATABASE_URL,
     max: 8,
-    ssl: isRender ? { rejectUnauthorized: false } : undefined,
+    ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
   });
   pgPool.on('error', (err) => console.error('[pg pool error]', err.message));
 } else {
