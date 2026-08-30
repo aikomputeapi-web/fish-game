@@ -15,7 +15,7 @@
     </div>
     <p class="auth-sub" id="auth-sub">Welcome back — sign in to keep your points balance.</p>
     <input id="f-username" type="text" placeholder="username" autocomplete="username">
-    <input id="f-email" type="email" placeholder="email" autocomplete="email" class="hidden">
+    <input id="f-email" type="email" placeholder="email (optional)" autocomplete="email" class="hidden">
     <input id="f-referral" type="text" placeholder="referral code (optional)" autocomplete="off" class="hidden">
     <input id="f-password" type="password" placeholder="password" autocomplete="current-password">
     <div id="auth-msg" class="auth-msg"></div>
@@ -37,7 +37,7 @@
   const tabL = document.getElementById('tab-login');
   const tabS = document.getElementById('tab-signup');
   const sub = document.getElementById('auth-sub');
-  function setMode(m){ mode=m; tabL.classList.toggle('on', m==='login'); tabS.classList.toggle('on', m==='signup'); elE.classList.toggle('hidden', m==='login'); elR.classList.toggle('hidden', m==='login'); btnResend.classList.add('hidden'); btn.textContent = m==='login'?'LOG IN':'CREATE ACCOUNT'; sub.textContent = m==='login' ? 'Welcome back — sign in to keep your points balance.' : 'New players get 2,000 bonus points on signup. Email verification required.'; elMsg.textContent=''; }
+  function setMode(m){ mode=m; tabL.classList.toggle('on', m==='login'); tabS.classList.toggle('on', m==='signup'); elE.classList.toggle('hidden', m==='login'); elR.classList.toggle('hidden', m==='login'); btnResend.classList.add('hidden'); btn.textContent = m==='login'?'LOG IN':'CREATE ACCOUNT'; sub.textContent = m==='login' ? 'Welcome back — sign in to keep your points balance.' : 'New players get 2,000 bonus points on signup. No email verification needed.'; elMsg.textContent=''; }
   tabL.onclick = () => setMode('login');
   tabS.onclick = () => setMode('signup');
   function showMsg(text, isErr){ elMsg.textContent = text; elMsg.classList.toggle('error', !!isErr); }
@@ -46,18 +46,12 @@
     showMsg('');
     btnResend.classList.add('hidden');
     if (!u || !p){ showMsg('username and password required', true); return; }
-    if (mode==='signup' && !em){ showMsg('email required', true); return; }
+    if (mode==='signup' && em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ showMsg('invalid email format', true); return; }
     btn.disabled = true; btn.textContent = '…';
     try {
       const r = mode==='login' ? await Auth.login(u,p) : await Auth.register(u,em,p,elR.value.trim());
-      if (r.ok && r.data.pendingVerification){
-        btn.disabled = false; setMode('login');
-        showMsg('Account created — check ' + r.data.email + ' for a verification link.' + (r.data.referralApplied ? ' Referral bonus applied.' : ''));
-        return;
-      }
       if (r.ok){ Auth.redirectByRole(r.data.role); return; }
       showMsg((r.data && r.data.error) || ('error ' + r.status), true);
-      if (r.data && r.data.needVerify) btnResend.classList.remove('hidden');
     } catch(e){ showMsg('network error', true); }
     btn.disabled = false; btn.textContent = mode==='login'?'LOG IN':'CREATE ACCOUNT';
   }

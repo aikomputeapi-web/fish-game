@@ -43,7 +43,6 @@ function requireAuth(req, res, next) {
     db.getUser(u.id).then((row) => {
       if (!row) return res.status(401).json({ error: 'user not found' });
       if (row.banned) return res.status(403).json({ error: 'account banned' });
-      if (row.email && !row.email_verified) return res.status(403).json({ error: 'email not verified' });
       req.user = row;
       next();
     }).catch(next);
@@ -79,19 +78,20 @@ function newVerifyToken() {
 
 router.post('/register', ah(async (req, res) => {
   const username = String(req.body.username || '').trim();
-  const email = String(req.body.email || '').trim();
+  const email = String(req.body.email || '').trim(); // email optional now
   const password = String(req.body.password || '');
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'username must be 3-20 chars (letters, numbers, _)' });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'valid email required' });
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'invalid email format' });
   if (password.length < 8) return res.status(400).json({ error: 'password must be at least 8 chars' });
   const existing = await db.getUserByName(username);
   if (existing) return res.status(409).json({ error: 'username already taken' });
-  const emailTaken = await db.getUserByEmail(email);
-  if (emailTaken) return res.status(409).json({ error: 'email already registered' });
+  if (email) {
+    const emailTaken = await db.getUserByEmail(email);
+    if (emailTaken) return res.status(409).json({ error: 'email already registered' });
+  }
   const hash = await bcrypt.hash(password, 12);
-  const { token, expires } = newVerifyToken();
-  const user = await db.createUser(username, hash, { email, verifyToken: token, verifyExpires: expires });
-  await sendVerificationEmail(email, username, token);
+  // Auto-verify: no email link needed. If email provided, store it verified.
+  const user = await db.createUser(username, hash, email ? { email, verifyToken: null, verifyExpires: null } : {});
   // optional referral code — never blocks signup; invalid codes are ignored
   let referralApplied = false;
   const referralCode = String(req.body.referralCode || '').trim();
@@ -99,8 +99,13 @@ router.post('/register', ah(async (req, res) => {
     const r = await db.applyReferral(user.id, referralCode);
     referralApplied = !!(r && r.ok);
   }
-  // no auth cookie yet — account activates once the email link is clicked
-  res.json({ id: user.id, username: user.username, pendingVerification: true, email, referralApplied });
+  // Log the user in immediately
+  await db.touchLogin(user.id);
+  // If email provided, mark it as verified
+  if (email) await db.markEmailVerified(user.id);
+  const fullUser = await db.getUser(user.id);
+  setAuthCookie(res, fullUser);
+  res.json({ id: user.id, username: user.username, points: fullUser.points, role: fullUser.role, referralApplied });
 }));
 
 // email link target: verifies the account, logs the user in, sends them to the app
@@ -145,10 +150,6 @@ router.post('/login', ah(async (req, res) => {
   if (user.banned) return res.status(403).json({ error: 'account banned' });
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
-  // accounts with an email must verify it first (legacy email-less accounts are grandfathered)
-  if (user.email && !user.email_verified) {
-    return res.status(403).json({ error: 'please verify your email before logging in', needVerify: true });
-  }
   await db.touchLogin(user.id);
   setAuthCookie(res, user);
   res.json({ id: user.id, username: user.username, points: user.points, role: user.role, managerId: user.manager_id });

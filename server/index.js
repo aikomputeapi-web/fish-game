@@ -91,7 +91,6 @@ io.use((socket, next) => {
     db.getUser(payload.id).then(async (u) => {
       if (!u) return next(new Error('no user'));
       if (u.banned) return next(new Error('banned'));
-      if (u.email && !u.email_verified) return next(new Error('email not verified'));
       // Resolve the stake tier the client asked for; VIP is gated by points.
       const requested = Object.prototype.hasOwnProperty.call(ROOM_TIERS, reqAuth.tier) ? reqAuth.tier : 'mid';
       const s = await db.getSettings(['vip_min_points']);
