@@ -105,7 +105,7 @@ router.post('/register', ah(async (req, res) => {
   if (email) await db.markEmailVerified(user.id);
   const fullUser = await db.getUser(user.id);
   setAuthCookie(res, fullUser);
-  res.json({ id: user.id, username: user.username, points: fullUser.points, role: fullUser.role, referralApplied });
+  res.json({ id: user.id, username: user.username, points: Number(fullUser.points) || 0, role: fullUser.role, referralApplied });
 }));
 
 // email link target: verifies the account, logs the user in, sends them to the app
@@ -152,7 +152,7 @@ router.post('/login', ah(async (req, res) => {
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
   await db.touchLogin(user.id);
   setAuthCookie(res, user);
-  res.json({ id: user.id, username: user.username, points: user.points, role: user.role, managerId: user.manager_id });
+  res.json({ id: user.id, username: user.username, points: Number(user.points) || 0, role: user.role, managerId: user.manager_id });
 }));
 
 router.post('/logout', ah(async (req, res) => {
@@ -172,7 +172,7 @@ router.get('/me', ah(async (req, res) => {
     db.getUserAchievements(row.id),
   ]);
   res.json({
-    id: row.id, username: row.username, points: row.points, role: row.role,
+    id: row.id, username: row.username, points: Number(row.points) || 0, role: row.role,
     banned: !!row.banned, managerId: row.manager_id,
     level, xp: Number(row.xp) || 0, xpNeeded: xpNeeded(level),
     dailyStreak: Number(row.daily_streak) || 0,

@@ -468,7 +468,7 @@ async function withTransaction(fn) {
 async function adjustPoints(userId, amount, { type, adminId = null, managerId = null, note = null } = {}) {
   if (amount === 0) {
     const u = await getUser(userId);
-    return { balance: u ? u.points : 0, ok: true };
+    return { balance: u ? Number(u.points) || 0 : 0, ok: true };
   }
   return withTransaction(async (tx) => {
     let rows;
@@ -485,7 +485,7 @@ async function adjustPoints(userId, amount, { type, adminId = null, managerId = 
       );
       if (rows.length === 0) return { ok: false, reason: 'no_user' };
     }
-    const newBal = rows[0].points;
+    const newBal = Number(rows[0].points) || 0;
     await tx.query(
       "INSERT INTO transactions (user_id, type, amount, balance_after, admin_id, manager_id, note) VALUES (?,?,?,?,?,?,?)",
       [userId, type, amount, newBal, adminId, managerId, note]

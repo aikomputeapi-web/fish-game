@@ -310,7 +310,7 @@ async function win(userId, amount, statsKey, io, note = 'payout') {
 
 function broadcastBalance(userId, balance) {
   const set = sockets.get(userId);
-  if (set) for (const s of set) s.emit('balance', { points: balance });
+  if (set) for (const s of set) s.emit('balance', { points: Number(balance) || 0 });
 }
 
 // ---- fury / energy meter ----
