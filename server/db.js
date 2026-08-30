@@ -13,7 +13,12 @@ let sqliteTransactionQueue = Promise.resolve();
 
 if (ENGINE === 'pg') {
   const { Pool } = require('pg');
-  pgPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 8 });
+  const isRender = !!process.env.RENDER || process.env.DATABASE_URL?.includes('render.com');
+  pgPool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: 8,
+    ssl: isRender ? { rejectUnauthorized: false } : undefined,
+  });
   pgPool.on('error', (err) => console.error('[pg pool error]', err.message));
 } else {
   const { DatabaseSync } = require('node:sqlite');
